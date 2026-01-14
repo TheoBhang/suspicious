@@ -4,7 +4,7 @@ on:
   push:
     paths:
     - 'Suspicious/**'
-    branches: [ master ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:

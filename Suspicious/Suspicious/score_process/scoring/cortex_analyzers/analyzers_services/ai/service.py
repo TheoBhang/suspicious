@@ -205,10 +205,10 @@ class AnalyzerAI(BaseAnalyzer):
                 item_type = "alert"
 
                 update_suspicious_collection(
-                    suspicious_collection,
                     phishing_campaign,
                     alert_id,
                     item["sourceRef"],
+                    suspicious_collection,
                 )
 
             # ----------------------

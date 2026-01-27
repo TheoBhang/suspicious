@@ -157,6 +157,12 @@ def _check_mail_artifacts_for_deny_list(mail, deny_list: Set[str], logger: loggi
         domain_obj, url_obj, address = None, None, None
         source = "Unknown"
 
+        if hasattr(artifact, 'artifactIsMailAddress') and artifact.artifactIsMailAddress:
+            mail_address = getattr(artifact.artifactIsMailAddress, 'mail_address', None)
+            if mail_address and hasattr(mail_address, 'address'):
+                address = mail_address.address
+                source = "Mail Address"
+
         if hasattr(artifact, 'artifactIsDomain') and artifact.artifactIsDomain:
             domain = getattr(artifact.artifactIsDomain, 'domain', None)
             if domain and hasattr(domain, 'value'):

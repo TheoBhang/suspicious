@@ -35,6 +35,30 @@ from django.http import StreamingHttpResponse
 import os
 import logging
 from minio.error import S3Error
+
+from django.conf import settings
+from django.db import transaction
+from django.shortcuts import get_object_or_404, redirect
+from django.utils import timezone
+
+from rest_framework.permissions import AllowAny
+
+import hashlib
+import requests
+
+from score_process.score_utils.thehive.challenge import ChallengeToTheHiveService
+from score_process.score_utils.send_mail.service import MailNotificationService
+
+from django.contrib.auth import get_user_model
+
+from case_handler.models import Case
+from api.models import CaseChallengeToken
+
+
+User = get_user_model()
+
+
+
 # ---------------------------------------------------------------------
 # Permissions
 # ---------------------------------------------------------------------
@@ -42,6 +66,187 @@ from minio.error import S3Error
 ALLOWED_DOWNLOAD_GROUPS = {"Admin", "CERT"}
 CONFIG_PATH = os.environ.get("SUSPICIOUS_SETTINGS_PATH", "/app/settings.json")
 logger = logging.getLogger(__name__)
+with open(CONFIG_PATH) as config_file:
+    config = json.load(config_file)
+
+thehive_config = config.get("thehive", {})
+
+CHALLENGE_REDIRECT_URL = "https://suspicious-domain.com/submissions"
+
+# Put the real Suspicious API endpoint here (not the GitHub repo URL).
+SUSPICIOUS_API_URL = getattr(settings, "SUSPICIOUS_API_URL", "https://github.com/thalesgroup-cert/suspicious")
+
+
+class CaseChallengeOneTimeLinkView(APIView):
+    """
+    GET /api/cases/{case_id}/challenge?token=ONE_TIME_TOKEN
+
+    - No auth required
+    - Token is single-use, case-bound, expirable
+    - Always redirects to CHALLENGE_REDIRECT_URL (no validity oracle)
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []  # ensure DRF doesn't try to authenticate
+
+    def get(self, request, case_id: int):
+        raw = request.query_params.get("token")
+        if not raw:
+            return redirect(CHALLENGE_REDIRECT_URL)
+
+        # Case existence: you can choose to not reveal this either.
+        # But we still redirect; no body/status differences.
+        case = get_object_or_404(Case.objects.select_related("reporter"), pk=case_id)
+
+        token_hash = _hash_raw_token(raw)
+        now = timezone.now()
+
+        token_obj = None
+
+        # Consume token exactly once (race-safe)
+        with transaction.atomic():
+            token_obj = (
+                CaseChallengeToken.objects
+                .select_for_update()
+                .filter(case=case, token_hash=token_hash)
+                .first()
+            )
+            if not token_obj:
+                return redirect(CHALLENGE_REDIRECT_URL)
+
+            if token_obj.used_at is not None or now >= token_obj.expires_at:
+                return redirect(CHALLENGE_REDIRECT_URL)
+
+            # Mark used immediately to prevent replay (even if downstream fails)
+            token_obj.used_at = now
+            # optional audit fields if present on your model:
+            if hasattr(token_obj, "used_ip"):
+                token_obj.used_ip = request.META.get("REMOTE_ADDR")
+            if hasattr(token_obj, "used_user_agent"):
+                token_obj.used_user_agent = (request.META.get("HTTP_USER_AGENT") or "")[:2000]
+
+            update_fields = ["used_at"]
+            if hasattr(token_obj, "used_ip"):
+                update_fields.append("used_ip")
+            if hasattr(token_obj, "used_user_agent"):
+                update_fields.append("used_user_agent")
+
+            token_obj.save(update_fields=update_fields)
+
+        # External call + Case updates (token already consumed => at-most-once)
+        self._call_suspicious_and_update_case(case=case, token_obj=token_obj)
+
+        # Update stats + notify (best-effort, should not block redirect)
+        try:
+            if hasattr(case, "reporter") and case.reporter_id:
+                _update_case_challenge_stats(case.reporter)
+            _notify_case_challenge(case, logger)
+        except Exception:
+            logger.exception("Challenge notify/stats failed for case %s", case.id)
+
+        return redirect(CHALLENGE_REDIRECT_URL)
+
+    def _call_suspicious_and_update_case(self, *, case: Case, token_obj):
+        payload = {
+            "case_id": case.pk,
+            "action": "challenge",
+        }
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            resp = requests.post(
+                SUSPICIOUS_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=(3.05, 10),
+            )
+
+            # optional audit fields
+            if hasattr(token_obj, "api_status_code"):
+                token_obj.api_status_code = resp.status_code
+
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {"raw": resp.text[:5000]}
+
+            if hasattr(token_obj, "api_response"):
+                token_obj.api_response = data
+
+            if 200 <= resp.status_code < 300:
+                # Required Case state updates
+                case.is_challenged = True
+                case.challenged_result = data
+                case.status = "Challenged"
+                case.save(update_fields=["is_challenged", "challenged_result", "status"])
+            else:
+                if hasattr(token_obj, "api_error"):
+                    token_obj.api_error = f"Non-2xx from external API: {resp.status_code}"
+
+        except requests.RequestException as e:
+            if hasattr(token_obj, "api_error"):
+                token_obj.api_error = f"{e.__class__.__name__}: {str(e)[:2000]}"
+        finally:
+            # save token audit best-effort
+            try:
+                update_fields = []
+                for f in ("api_status_code", "api_response", "api_error"):
+                    if hasattr(token_obj, f):
+                        update_fields.append(f)
+                if update_fields:
+                    token_obj.save(update_fields=update_fields)
+            except Exception:
+                logger.exception("Failed saving challenge token audit for case %s", case.id)
+
+def _hash_raw_token(raw_token: str) -> str:
+    """
+    SHA256(SECRET_KEY || raw_token) hex digest.
+    'Pepper' via SECRET_KEY prevents offline brute force if DB leaks.
+    """
+    h = hashlib.sha256()
+    h.update((settings.SECRET_KEY + raw_token).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _update_case_challenge_stats(user):
+    now = timezone.now()
+    stats, _ = UserCasesMonthlyStats.objects.get_or_create(
+        user=user,
+        month=now.strftime("%m"),
+        year=now.year,
+        defaults={"challenged_cases": 0, "total_cases": 0},
+    )
+    stats.challenged_cases += 1
+    stats.save(update_fields=["challenged_cases"])
+
+
+def _notify_case_challenge(case: Case, logger):
+    """
+    “Notify process by hand” equivalent to your CaseChallengeService.notify().
+    Adjust import paths/names to your existing TheHive/email notification services.
+    """
+    send_to_thehive = thehive_config.get("enabled", False)
+    reporter = getattr(case, "reporter", None)
+    reporter_name = getattr(reporter, "username", "unknown")
+
+    mail_header = f"Case ID {case.id} challenged by {reporter_name}"
+    logger.info(
+        "Notifying about challenge for case ID %s. Send to TheHive: %s",
+        case.id, send_to_thehive
+    )
+
+    if send_to_thehive:
+        logger.info("Sending challenge notification to TheHive for case ID %s", case.id)
+        ChallengeToTheHiveService(case, None, mail_header).send_to_thehive()
+        logger.info("Challenge notification sent to TheHive for case ID %s", case.id)
+        return
+
+    cert_users = User.objects.filter(groups__name="CERT", is_active=True).exclude(email="")
+    for cert_user in cert_users:
+        ChallengeToTheHiveService(case, cert_user, mail_header).send()
+
 
 
 class StorageUnavailable(APIException):

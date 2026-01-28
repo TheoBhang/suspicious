@@ -1,3 +1,7 @@
+import hashlib
+import secrets
+from urllib.parse import urlparse
+
 from django.conf import settings
 from django.db import models
 from ip_process.models import IP
@@ -143,6 +147,62 @@ def create_case_challenge_token(*, case: Case, ttl: timedelta = timedelta(hours=
         expires_at=timezone.now() + ttl,
     )
     return raw
+
+class CaseChallengeToken(models.Model):
+    case = models.ForeignKey(
+        Case,
+        on_delete=models.CASCADE,
+        related_name="challenge_tokens",
+        db_index=True,
+    )
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    used_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["case", "expires_at"]),
+            models.Index(fields=["case", "used_at"]),
+        ]
+
+    @staticmethod
+    def hash_token(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def issue_token(cls, case, *, lifetime=None):
+        if lifetime is None:
+            lifetime_seconds = getattr(settings, "CASE_CHALLENGE_TOKEN_TTL_SECONDS", 86400)
+            lifetime = datetime.timedelta(seconds=lifetime_seconds)
+        raw_token = secrets.token_urlsafe(32)
+        instance = cls.objects.create(
+            case=case,
+            token_hash=cls.hash_token(raw_token),
+            expires_at=timezone.now() + lifetime,
+        )
+        return raw_token, instance
+
+    @staticmethod
+    def build_challenge_url(case_id: int, token: str, api_base: str) -> str:
+        base = (api_base or "").rstrip("/")
+        if not base:
+            return ""
+        if base.endswith("/api"):
+            base = base[:-4]
+        return f"{base}/api/cases/{case_id}/challenge?token={token}"
+
+    @staticmethod
+    def normalize_api_base(submissions_url: str) -> str:
+        parsed = urlparse(submissions_url or "")
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    def mark_used(self) -> None:
+        self.used_at = timezone.now()
+        self.save(update_fields=["used_at"])
+
 
 class CaseHasFileOrMail(models.Model):
     """

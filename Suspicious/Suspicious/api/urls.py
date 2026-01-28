@@ -13,6 +13,7 @@ from .views import (
 
     # Downloads
     DownloadCaseArchiveView,
+    CaseChallengeTokenView,
 )
 from .views import challenge_case_via_token
 
@@ -71,5 +72,9 @@ urlpatterns = [
         DownloadCaseArchiveView.as_view(),
         name="case-download",
     ),
-    path("api/cases/<int:case_id>/challenge", challenge_case_via_token, name="case-challenge"),
+    path(
+        "cases/<int:case_id>/challenge",
+        CaseChallengeTokenView.as_view(),
+        name="case-challenge",
+    ),
 ]

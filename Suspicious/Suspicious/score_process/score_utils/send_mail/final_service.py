@@ -1,8 +1,11 @@
 import json
+from urllib.parse import urlparse
+
 from .models import FinalMailServiceConfigSocial
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from .send_email_service import SendMailService
+from case_handler.models import CaseChallengeToken
 
 CONFIG_PATH = "/app/settings.json"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -133,7 +136,8 @@ class FinalEmailService:
                 "result_color": "#FF9A00",
                 "result_text": "As a conclusion, this case has been assessed as suspicious*.",
                 "result_description": (
-                    f"You may challenge the result <a href='{online}'>here</a>."
+                    "You may challenge the result "
+                    f"<a href='{self._challenge_url() or online}'>here</a>."
                 ),
             },
             "Safe": {
@@ -144,6 +148,17 @@ class FinalEmailService:
         }
 
         return mapping.get(self.case.results, mapping["Suspicious"])
+
+    def _challenge_url(self) -> str:
+        api_base = self.config.get("api_base")
+        if not api_base:
+            parsed = urlparse(self.config.get("submissions", ""))
+            if parsed.scheme and parsed.netloc:
+                api_base = f"{parsed.scheme}://{parsed.netloc}"
+        if not api_base:
+            return ""
+        token, _ = CaseChallengeToken.issue_token(self.case)
+        return CaseChallengeToken.build_challenge_url(self.case.id, token, api_base)
 
     # ------------------ send ------------------
 
@@ -166,4 +181,3 @@ class FinalEmailService:
         )
 
         send_mail_service.close()
-

@@ -12,6 +12,10 @@ from mail_feeder.models import Mail
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 import datetime
+from datetime import timedelta
+from __future__ import annotations
+
+import hashlib
 
 class Status(models.TextChoices):
     """
@@ -81,6 +85,68 @@ class Case(models.Model):
         now = timezone.now()
         return now - datetime.timedelta(days=1) <= self.creation_date <= now
 
+class CaseChallengeToken(models.Model):
+    """
+    One-time token for challenging a specific Case.
+    Store only a hash; the raw token exists only in the emailed URL.
+    """
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name="challenge_tokens")
+
+    # SHA-256 hex digest (64 chars)
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(db_index=True)
+
+    used_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    used_ip = models.GenericIPAddressField(null=True, blank=True)
+    used_user_agent = models.TextField(null=True, blank=True)
+
+    # Optional but useful for auditability/debugging:
+    api_status_code = models.IntegerField(null=True, blank=True)
+    api_response = models.JSONField(null=True, blank=True)
+    api_error = models.TextField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["case", "expires_at"]),
+            models.Index(fields=["case", "used_at"]),
+        ]
+
+    @property
+    def is_used(self) -> bool:
+        return self.used_at is not None
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+
+def _token_pepper() -> str:
+    return settings.SECRET_KEY
+
+
+def hash_raw_token(raw_token: str) -> str:
+    # SHA256(pepper || raw_token)
+    h = hashlib.sha256()
+    h.update((_token_pepper() + raw_token).encode("utf-8"))
+    return h.hexdigest()
+
+
+def create_case_challenge_token(*, case: Case, ttl: timedelta = timedelta(hours=24)) -> str:
+    """
+    Returns the raw token to embed in the email link.
+    The DB stores only the hash.
+    """
+    import secrets
+
+    raw = secrets.token_urlsafe(32)  # ~256 bits of entropy
+    CaseChallengeToken.objects.create(
+        case=case,
+        token_hash=hash_raw_token(raw),
+        expires_at=timezone.now() + ttl,
+    )
+    return raw
 
 class CaseChallengeToken(models.Model):
     case = models.ForeignKey(

@@ -15,6 +15,8 @@ from .views import (
     DownloadCaseArchiveView,
     CaseChallengeTokenView,
 )
+from .views import challenge_case_via_token
+
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 urlpatterns = [
     path("schema/", SpectacularAPIView.as_view(), name="schema"),

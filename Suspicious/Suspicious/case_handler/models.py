@@ -1,3 +1,4 @@
+from __future__ import annotations
 import hashlib
 import secrets
 from urllib.parse import urlparse
@@ -13,7 +14,6 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 import datetime
 from datetime import timedelta
-from __future__ import annotations
 
 import hashlib
 

@@ -60,6 +60,7 @@ class Case(models.Model):
     fileOrMail = models.ForeignKey('CaseHasFileOrMail', on_delete=models.CASCADE, related_name='cases', null=True, blank=True, db_index=True)
     nonFileIocs = models.ForeignKey('CaseHasNonFileIocs', on_delete=models.CASCADE, related_name='cases', null=True, blank=True, db_index=True)
     is_challenged = models.BooleanField(default=False)
+    is_challengeable = models.BooleanField(default=True)
     challenged_result = models.CharField(max_length=20, choices=Result.choices, default=Result.UNCHALLENGED, verbose_name='Challenged Result', db_index=True)
     creation_date = models.DateTimeField(auto_now_add=True, db_index=True)
     last_update = models.DateTimeField(auto_now=True)

@@ -418,6 +418,7 @@ CRONJOBS = [
     ('*/1 * * * *', 'tasp.cron.fetch_emails.fetch_and_process_emails', '>> /app/log/fetched_mail.log'),
     ('*/1 * * * *', 'tasp.cron.sync_cortex.sync_cortex_analyzers'),
     ('*/1 * * * *', 'tasp.cron.user_and_cases.update_ongoing_case_jobs', '>> /app/log/case_updating.log'),
+    ('0 0 * * *', 'tasp.cron.suspicious.check_challengeable', '>> /app/log/case_challengeable.log'),
     ('*/5 * * * *', 'tasp.cron.kpi.sync_monthly_kpi'),
     ('*/10 * * * *', 'tasp.cron.user_and_cases.sync_user_profiles'),
     ('0 0 1 * *', 'tasp.cron.cleanup.delete_old_analyzer_reports', '>> /app/log/cleanup_phishing.log'),

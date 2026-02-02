@@ -116,7 +116,7 @@
               <td class="result has-text-centered" data-label="Result">{{case.results}}</td>
               <td class="challenge has-text-centered" data-label="Challenge">
                 <div>
-                  {% if case.is_challengeable %}
+                  {% if case.is_challengeable or case.is_challenged %}
                     <button class="button js-modal-challenge-triggers has-background-link has-text-white challengebtn" value="{{ case.id }}">Challenge</button>
                   {% else %}
                     <p>Not Challengeable</p>

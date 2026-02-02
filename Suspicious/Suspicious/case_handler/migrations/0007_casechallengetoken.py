@@ -21,8 +21,8 @@ class Migration(migrations.Migration):
             ],
             options={
                 "indexes": [
-                    models.Index(fields=["case", "expires_at"]),
-                    models.Index(fields=["case", "used_at"]),
+                    models.Index(fields=["case", "expires_at"], name="cct_case_expires_idx"),
+                    models.Index(fields=["case", "used_at"], name="cct_case_used_idx"),
                 ],
             },
         ),

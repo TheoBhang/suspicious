@@ -1,0 +1,47 @@
+.dashboard {
+  display: grid;
+  gap: 1.5rem;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  color: #1f2937;
+}
+
+.dashboard__header h1 {
+  margin-bottom: 0.25rem;
+  font-size: 1.75rem;
+}
+
+.dashboard__controls {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.dashboard__controls label {
+  display: grid;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.dashboard__summary {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.dashboard__card {
+  padding: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.dashboard__stats ul {
+  list-style: none;
+  padding-left: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.dashboard__error {
+  color: #b91c1c;
+}

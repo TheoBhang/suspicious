@@ -1,0 +1,2899 @@
+openapi: 3.0.3
+info:
+  title: Suspicious API
+  version: 1.0.0
+  description: Suspicious — security intake and automated analysis platform.
+paths:
+  /api/auth/login/:
+    post:
+      operationId: auth_login
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Login'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Login'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Login'
+        required: true
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+          description: ''
+        '400':
+          description: Invalid request payload.
+        '401':
+          description: Invalid credentials.
+        '429':
+          description: Too many login attempts.
+  /api/auth/logout/:
+    post:
+      operationId: auth_logout
+      tags:
+      - auth
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResponse'
+          description: ''
+        '401':
+          description: Authentication credentials were not provided or are invalid.
+  /api/auth/me/:
+    get:
+      operationId: auth_me
+      tags:
+      - auth
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+          description: ''
+        '401':
+          description: Authentication credentials were not provided or are invalid.
+  /api/campaigns/classification-counts/:
+    get:
+      operationId: campaign_classification_counts
+      description: |-
+        Return aggregate message counts by top-level classification for the current Chroma collection.
+
+        **Label semantics**
+        - `SAFE`: benign content.
+        - `UNWANTED`: unwanted but not dangerous content.
+        - `DANGEROUS`: confirmed dangerous content.
+
+        **Aggregation rule**
+        - Records labeled `SUSPICIOUS` are folded into `UNWANTED` for this endpoint.
+        - This is intentional to preserve the existing frontend contract, which expects three buckets only: `SAFE`, `UNWANTED`, and `DANGEROUS`.
+
+        **Implementation note**
+        - Counts are computed by scanning metadata and normalizing the `classification` field rather than issuing multiple per-label queries.
+      summary: Get campaign classification counts
+      tags:
+      - Campaigns
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignClassificationCounts'
+              examples:
+                ClassificationCounts:
+                  value:
+                    SAFE: 128
+                    UNWANTED: 41
+                    DANGEROUS: 9
+                  summary: Classification counts
+          description: Three-bucket classification counts. `SUSPICIOUS` is aggregated
+            into `UNWANTED`.
+  /api/campaigns/mail-volume/:
+    get:
+      operationId: campaign_mail_volume
+      description: |-
+        Return daily mail volume for the last 15 UTC days and inferred campaign date bands.
+
+        **Label semantics**
+        - `dangerous` counts only records whose normalized `classification` is `DANGEROUS`.
+        - `non_danger` counts every other classified or unclassified record that has a usable date.
+
+        **Date extraction behavior**
+        - The endpoint prefers parsed mail headers such as `Date` when available.
+        - It then falls back to known metadata timestamp fields such as `sent_date`, `date`, `received_at`, `created_at`, `timestamp`, and related keys.
+        - All date bucketing is performed in UTC.
+
+        **Campaign grouping heuristic**
+        - Campaign bands are inferred by grouping records that share the same normalized `sourceRefs` set.
+        - `sourceRefs` are parsed defensively from arrays or string-encoded lists, de-duplicated, sorted, and then used as the grouping key.
+        - This is a heuristic, not a guaranteed campaign identifier. Reused or noisy `sourceRefs` may merge unrelated messages into the same displayed band.
+      summary: Get mail volume for the last 15 days with inferred campaign windows
+      tags:
+      - Campaigns
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignMailVolumeResponse'
+              examples:
+                MailVolumeResponse:
+                  value:
+                    dates:
+                    - '2026-03-02'
+                    - '2026-03-03'
+                    - '2026-03-04'
+                    non_danger:
+                    - 4
+                    - 7
+                    - 3
+                    dangerous:
+                    - 1
+                    - 0
+                    - 2
+                    campaigns:
+                    - name: sender-domain-a, subject-cluster-1
+                      start: '2026-03-02T00:00:00Z'
+                      end: '2026-03-04T23:59:59.999999Z'
+                  summary: Mail volume response
+          description: Daily UTC mail volume and campaign date bands inferred from
+            shared `sourceRefs`.
+  /api/campaigns/pca/:
+    get:
+      operationId: campaign_pca
+      description: |-
+        Return a two-dimensional PCA projection of a deterministic sample of embeddings from the current Chroma collection.
+
+        **Label semantics**
+        - Point `label` is the normalized uppercase value of the metadata `classification` field.
+        - Unlike the counts endpoint, this endpoint does **not** fold `SUSPICIOUS` into `UNWANTED`; labels are exposed as stored after normalization.
+
+        **Sampling behavior**
+        - The endpoint does **not** fetch all embeddings first.
+        - It first walks collection IDs, then selects a deterministic subset up to `limit` using a stable hash of the Chroma record ID.
+        - The same collection contents and `limit` produce the same sample order.
+        - After sampling, embeddings are grouped by vector dimensionality and PCA is run only on the largest dimension bucket to avoid mixing incompatible embeddings.
+
+        **Numerical behavior**
+        - PCA is computed with centered vectors and SVD in float64.
+        - `explained_variance` contains the variance ratios for PC1 and PC2.
+        - If only one usable dimension exists, PC2 is returned as zero.
+      summary: Get a 2D PCA projection of sampled embeddings
+      parameters:
+      - in: query
+        name: limit
+        schema:
+          type: integer
+        description: 'Maximum number of records to sample before PCA. Default: 1500.
+          Maximum: 5000.'
+      tags:
+      - Campaigns
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignPcaResponse'
+              examples:
+                PCAResponse:
+                  value:
+                    explained_variance:
+                    - 0.37
+                    - 0.18
+                    points:
+                    - x: -2.14
+                      y: 0.88
+                      label: SAFE
+                      suspicious_case_id: '1234'
+                      sourceRefs:
+                      - sender-domain-a
+                      - subject-cluster-1
+                    - x: 1.27
+                      y: -0.42
+                      label: SUSPICIOUS
+                      suspicious_case_id: '1250'
+                      sourceRefs:
+                      - sender-domain-b
+                  summary: PCA response
+          description: PCA projection points and explained variance ratios for PC1
+            and PC2.
+  /api/cases/{case_id}/challenge/:
+    get:
+      operationId: cases_challenge_retrieve
+      parameters:
+      - in: path
+        name: case_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - cases
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/cases/{case_id}/challenge/{token}/:
+    get:
+      operationId: cases_challenge_retrieve_2
+      parameters:
+      - in: path
+        name: case_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: token
+        schema:
+          type: string
+        required: true
+      tags:
+      - cases
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/cases/{case_id}/comments/:
+    get:
+      operationId: cases_comments_retrieve
+      parameters:
+      - in: path
+        name: case_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - cases
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+    post:
+      operationId: cases_comments_create
+      parameters:
+      - in: path
+        name: case_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - cases
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cases/{case_id}/download/:
+    get:
+      operationId: cases_download_retrieve
+      parameters:
+      - in: path
+        name: case_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - cases
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cases/{case_id}/mail-preview.png:
+    get:
+      operationId: cases_mail_preview.png_retrieve
+      description: Stream the PNG preview of the email attached to a case.
+      parameters:
+      - in: path
+        name: case_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - cases
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/config/{scope}/:
+    get:
+      operationId: config_retrieve
+      parameters:
+      - in: path
+        name: scope
+        schema:
+          type: string
+        required: true
+      tags:
+      - config
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/connectors/:
+    get:
+      operationId: connectors_retrieve
+      tags:
+      - connectors
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/connectors/{name}/:
+    patch:
+      operationId: connectors_partial_update
+      parameters:
+      - in: path
+        name: name
+        schema:
+          type: string
+        required: true
+      tags:
+      - connectors
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/connectors/{name}/config/:
+    get:
+      operationId: connectors_config_retrieve
+      parameters:
+      - in: path
+        name: name
+        schema:
+          type: string
+        required: true
+      tags:
+      - connectors
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+    put:
+      operationId: connectors_config_update
+      parameters:
+      - in: path
+        name: name
+        schema:
+          type: string
+        required: true
+      tags:
+      - connectors
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/connectors/{name}/deliveries/:
+    get:
+      operationId: connectors_deliveries_list
+      parameters:
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: path
+        name: name
+        schema:
+          type: string
+        required: true
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      tags:
+      - connectors
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedConnectorDeliveryList'
+          description: ''
+  /api/connectors/{name}/test/:
+    post:
+      operationId: connectors_test_create
+      parameters:
+      - in: path
+        name: name
+        schema:
+          type: string
+        required: true
+      tags:
+      - connectors
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/cortex/webhook/:
+    post:
+      operationId: cortex_webhook_create
+      tags:
+      - cortex
+      security:
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/dashboard/summary/:
+    get:
+      operationId: dashboard_summary_retrieve
+      description: Return the dashboard summary for a given month and year.
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: scope
+        schema:
+          type: string
+        description: Dashboard scope. Currently echoed for UI compatibility. Data
+          is not scope-filtered unless backend scope support is implemented.
+      - in: query
+        name: year
+        schema:
+          type: integer
+        required: true
+      tags:
+      - dashboard
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummaryResponse'
+          description: ''
+  /api/feeder/health/:
+    get:
+      operationId: feeder_health_retrieve
+      description: |-
+        Live status of the email_feeder service.
+
+        Returns 200 in all reachability scenarios (online or offline); the
+        `online` flag tells the UI how to render. We do *not* return 5xx
+        when the feeder is down because that would surface as a generic
+        error toast — the badge needs the full payload.
+      tags:
+      - feeder
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/health/:
+    get:
+      operationId: health_retrieve
+      description: Liveness + dependency status.
+      tags:
+      - health
+      security:
+      - TokenAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/home/summary/:
+    get:
+      operationId: home_summary_retrieve
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: integer
+          maximum: 12
+          minimum: 1
+      - in: query
+        name: year
+        schema:
+          type: integer
+          minimum: 1
+      tags:
+      - home
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeSummaryResponse'
+          description: ''
+  /api/investigations/:
+    get:
+      operationId: investigations_retrieve
+      parameters:
+      - in: query
+        name: from_date
+        schema:
+          type: string
+      - in: query
+        name: ordering
+        schema:
+          type: string
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+      - in: query
+        name: result
+        schema:
+          type: string
+      - in: query
+        name: search
+        schema:
+          type: string
+      - in: query
+        name: sort_field
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+      - in: query
+        name: to_date
+        schema:
+          type: string
+      - in: query
+        name: type
+        schema:
+          type: string
+      tags:
+      - Investigations
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: Paginated investigation list.
+        '403':
+          description: Not authorized.
+  /api/investigations/{case_id}/:
+    get:
+      operationId: investigations_retrieve_2
+      parameters:
+      - in: path
+        name: case_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Investigations
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationDetails'
+          description: ''
+        '403':
+          description: Not authorized.
+        '404':
+          description: Investigation not found.
+  /api/investigations/{case_id}/edit-global/:
+    patch:
+      operationId: investigations_edit_global_partial_update
+      parameters:
+      - in: path
+        name: case_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Investigations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedInvestigationGlobalEditRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedInvestigationGlobalEditRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedInvestigationGlobalEditRequest'
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvestigationDetails'
+          description: ''
+        '400':
+          description: Validation error.
+        '403':
+          description: Not authorized.
+        '404':
+          description: Investigation not found.
+  /api/oidc/callback/:
+    get:
+      operationId: oidc_callback_retrieve
+      description: |-
+        Step 2 of the OIDC flow.
+
+        Validates state → exchanges code (with PKCE verifier) → validates
+        id_token signature via JWKS → verifies nonce → gets-or-creates user
+        → issues a Knox token and sets it as an httpOnly cookie, then redirects
+        the SPA to /login?sso=1. The token never appears in the URL or in logs.
+      tags:
+      - oidc
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/oidc/login/:
+    get:
+      operationId: oidc_login_retrieve
+      description: |-
+        Step 1 of the OIDC flow.
+
+        Generates state (CSRF token), nonce (replay protection), and a PKCE
+        S256 pair. Stores all three in the session, then redirects the browser
+        to the provider's authorization_endpoint.
+      tags:
+      - oidc
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+  /api/profile/:
+    get:
+      operationId: profile_retrieve
+      tags:
+      - profile
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+    patch:
+      operationId: profile_partial_update
+      tags:
+      - profile
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/profile/appearance/:
+    patch:
+      operationId: profile_appearance_partial_update
+      tags:
+      - profile
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/profile/colors/:
+    get:
+      operationId: profile_colors_retrieve
+      tags:
+      - profile
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+    patch:
+      operationId: profile_colors_partial_update
+      tags:
+      - profile
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/profile/colors/reset/:
+    post:
+      operationId: profile_colors_reset_create
+      tags:
+      - profile
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/profile/preferences/:
+    patch:
+      operationId: profile_preferences_partial_update
+      tags:
+      - profile
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/settings/analyzers/:
+    get:
+      operationId: settings_analyzers_list
+      description: GET /api/settings/analyzers/
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      tags:
+      - settings
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAnalyzerSettingsList'
+          description: ''
+  /api/settings/analyzers/{analyzer_id}/:
+    put:
+      operationId: settings_analyzers_update
+      description: PATCH /api/settings/analyzers/<analyzer_id>/
+      parameters:
+      - in: path
+        name: analyzer_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyzerWeightUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AnalyzerWeightUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AnalyzerWeightUpdate'
+        required: true
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzerWeightUpdate'
+          description: ''
+    patch:
+      operationId: settings_analyzers_partial_update
+      description: PATCH /api/settings/analyzers/<analyzer_id>/
+      parameters:
+      - in: path
+        name: analyzer_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAnalyzerWeightUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAnalyzerWeightUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAnalyzerWeightUpdate'
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyzerWeightUpdate'
+          description: ''
+  /api/settings/email-feeder/:
+    get:
+      operationId: settings_email_feeder_retrieve
+      description: |-
+        GET   /api/settings/email-feeder/
+        PATCH /api/settings/email-feeder/
+      tags:
+      - settings
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailFeederState'
+          description: ''
+    put:
+      operationId: settings_email_feeder_update
+      description: |-
+        GET   /api/settings/email-feeder/
+        PATCH /api/settings/email-feeder/
+      tags:
+      - settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailFeederStateUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/EmailFeederStateUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EmailFeederStateUpdate'
+        required: true
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailFeederStateUpdate'
+          description: ''
+    patch:
+      operationId: settings_email_feeder_partial_update
+      description: |-
+        GET   /api/settings/email-feeder/
+        PATCH /api/settings/email-feeder/
+      tags:
+      - settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedEmailFeederStateUpdate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedEmailFeederStateUpdate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedEmailFeederStateUpdate'
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailFeederStateUpdate'
+          description: ''
+  /api/settings/list/{section}/:
+    get:
+      operationId: settings_list_retrieve
+      description: |-
+        GET  /api/settings/list/<section>/   (paginated: {count, next, previous, results})
+        POST /api/settings/list/<section>/
+      parameters:
+      - in: path
+        name: section
+        schema:
+          type: string
+        required: true
+      tags:
+      - settings
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsListBulkCreate'
+          description: ''
+    post:
+      operationId: settings_list_create
+      description: |-
+        GET  /api/settings/list/<section>/   (paginated: {count, next, previous, results})
+        POST /api/settings/list/<section>/
+      parameters:
+      - in: path
+        name: section
+        schema:
+          type: string
+        required: true
+      tags:
+      - settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsListBulkCreate'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SettingsListBulkCreate'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SettingsListBulkCreate'
+        required: true
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsListBulkCreate'
+          description: ''
+  /api/settings/list/{section}/{item_id}/:
+    delete:
+      operationId: settings_list_destroy
+      description: DELETE /api/settings/list/<section>/<item_id>/
+      parameters:
+      - in: path
+        name: item_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: section
+        schema:
+          type: string
+        required: true
+      tags:
+      - settings
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/stats/monthly-cases/:
+    get:
+      operationId: stats_monthly_cases_list
+      parameters:
+      - in: query
+        name: id
+        schema:
+          type: integer
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: month
+        schema:
+          type: number
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: query
+        name: year
+        schema:
+          type: number
+      tags:
+      - stats
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedMonthlyCasesSummaryList'
+          description: ''
+  /api/stats/monthly-cases/aggregate/:
+    get:
+      operationId: stats_monthly_cases_aggregate_retrieve
+      description: Aggregate case statistics for a given month and year.
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: year
+        schema:
+          type: integer
+        required: true
+      tags:
+      - stats
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonthlyCasesSummaryAggregate'
+          description: ''
+  /api/stats/monthly-reporters/:
+    get:
+      operationId: stats_monthly_reporters_list
+      parameters:
+      - in: query
+        name: id
+        schema:
+          type: integer
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: month
+        schema:
+          type: number
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: query
+        name: year
+        schema:
+          type: number
+      tags:
+      - stats
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedMonthlyReporterStatsList'
+          description: ''
+  /api/stats/top-prefixes/:
+    get:
+      operationId: stats_top_prefixes_retrieve
+      tags:
+      - stats
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/stats/total-cases/:
+    get:
+      operationId: stats_total_cases_list
+      parameters:
+      - in: query
+        name: id
+        schema:
+          type: integer
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: month
+        schema:
+          type: number
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: query
+        name: year
+        schema:
+          type: number
+      tags:
+      - stats
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTotalCasesStatsList'
+          description: ''
+  /api/stats/user-cases/:
+    get:
+      operationId: stats_user_cases_list
+      description: |-
+        List per-user monthly stats. month + year are required filters
+        to prevent unbounded scans (e.g. from Power BI imports).
+
+        Per-user breakdowns name individual analysts and their case volumes,
+        so access is limited to Admin/CERT — regular reporters only ever see
+        org-wide aggregates, never colleague-level figures.
+      parameters:
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: month
+        schema:
+          type: string
+        required: true
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: query
+        name: user
+        schema:
+          type: integer
+      - in: query
+        name: year
+        schema:
+          type: string
+        required: true
+      tags:
+      - stats
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedUserCasesMonthlyStatsList'
+          description: ''
+  /api/stats/user-cases/{id}/:
+    get:
+      operationId: stats_user_cases_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - stats
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCasesMonthlyStats'
+          description: ''
+  /api/stats/user-cases/aggregate/:
+    get:
+      operationId: stats_user_cases_aggregate_list
+      description: Aggregate per-user case statistics for a given month and year.
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: integer
+        required: true
+      - in: query
+        name: year
+        schema:
+          type: integer
+        required: true
+      tags:
+      - stats
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserCasesMonthlyStatsAggregateRow'
+          description: ''
+  /api/submissions/:
+    get:
+      operationId: submissions_list
+      summary: List submissions
+      parameters:
+      - in: query
+        name: mine
+        schema:
+          type: boolean
+        description: When true, restricts results to the authenticated user's submissions.
+      - in: query
+        name: ordering
+        schema:
+          type: string
+          enum:
+          - -created_at
+          - -id
+          - -result
+          - -status
+          - created_at
+          - id
+          - result
+          - status
+        description: Ordering field.
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+        description: Maximum 100.
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Case-insensitive substring match across id, description, reporter,
+          mail subject, file path, url/ip/hash.
+      tags:
+      - submissions
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSubmissionListList'
+          description: ''
+  /api/submissions/{submission_id}/:
+    get:
+      operationId: submissions_retrieve
+      parameters:
+      - in: path
+        name: submission_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - submissions
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionDetails'
+          description: ''
+  /api/submissions/{submission_id}/challenge/:
+    post:
+      operationId: submissions_challenge_create
+      summary: Challenge a submission
+      parameters:
+      - in: path
+        name: submission_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - submissions
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/submissions/{submission_id}/urls/{url_id}/analyze/:
+    post:
+      operationId: submissions_urls_analyze_create
+      parameters:
+      - in: path
+        name: submission_id
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: url_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - submissions
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/submit/config/:
+    get:
+      operationId: submit_config_retrieve
+      tags:
+      - submit
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/submit/file/:
+    post:
+      operationId: submit_file_create
+      tags:
+      - submit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitFile'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SubmitFile'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SubmitFile'
+        required: true
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitFile'
+          description: ''
+  /api/submit/other/:
+    post:
+      operationId: submit_other_create
+      tags:
+      - submit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitOther'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SubmitOther'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SubmitOther'
+        required: true
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitOther'
+          description: ''
+  /api/submit/url/:
+    post:
+      operationId: submit_url_create
+      tags:
+      - submit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitUrl'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SubmitUrl'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SubmitUrl'
+        required: true
+      security:
+      - knoxApiToken: []
+      - TokenAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitUrl'
+          description: ''
+components:
+  schemas:
+    AnalyzerSettings:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 50
+        weight:
+          type: number
+          format: double
+        analyzer_cortex_id:
+          type: string
+          maxLength: 50
+        is_active:
+          type: boolean
+      required:
+      - analyzer_cortex_id
+      - id
+      - name
+    AnalyzerWeightUpdate:
+      type: object
+      properties:
+        weight:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,2}(?:\.\d{0,1})?$
+      required:
+      - weight
+    BlankEnum:
+      enum:
+      - ''
+    CampaignClassificationCounts:
+      type: object
+      properties:
+        SAFE:
+          type: integer
+          minimum: 0
+        UNWANTED:
+          type: integer
+          minimum: 0
+        DANGEROUS:
+          type: integer
+          minimum: 0
+      required:
+      - DANGEROUS
+      - SAFE
+      - UNWANTED
+    CampaignMailVolumeBand:
+      type: object
+      properties:
+        name:
+          type: string
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+      required:
+      - end
+      - name
+      - start
+    CampaignMailVolumeResponse:
+      type: object
+      properties:
+        dates:
+          type: array
+          items:
+            type: string
+            format: date
+        non_danger:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+        dangerous:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+        campaigns:
+          type: array
+          items:
+            $ref: '#/components/schemas/CampaignMailVolumeBand'
+      required:
+      - campaigns
+      - dangerous
+      - dates
+      - non_danger
+    CampaignPcaPoint:
+      type: object
+      properties:
+        x:
+          type: number
+          format: double
+        y:
+          type: number
+          format: double
+        label:
+          type: string
+        suspicious_case_id:
+          type: string
+          nullable: true
+        mail_subject:
+          type: string
+          nullable: true
+        sourceRefs:
+          type: array
+          items:
+            type: string
+      required:
+      - label
+      - x
+      - y
+    CampaignPcaResponse:
+      type: object
+      properties:
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/CampaignPcaPoint'
+        explained_variance:
+          type: array
+          items:
+            type: number
+            format: double
+          maxItems: 2
+          minItems: 2
+      required:
+      - explained_variance
+      - points
+    ChallengeProposedResultEnum:
+      enum:
+      - Safe
+      - Dangerous
+      type: string
+      description: |-
+        * `Safe` - Safe
+        * `Dangerous` - Dangerous
+    ClassificationEnum:
+      enum:
+      - SAFE
+      - INCONCLUSIVE
+      - UNCHALLENGED
+      - ALLOW_LISTED
+      - FAILURE
+      - SUSPICIOUS
+      - DANGEROUS
+      type: string
+      description: |-
+        * `SAFE` - SAFE
+        * `INCONCLUSIVE` - INCONCLUSIVE
+        * `UNCHALLENGED` - UNCHALLENGED
+        * `ALLOW_LISTED` - ALLOW_LISTED
+        * `FAILURE` - FAILURE
+        * `SUSPICIOUS` - SUSPICIOUS
+        * `DANGEROUS` - DANGEROUS
+    ConnectorDelivery:
+      type: object
+      properties:
+        id:
+          type: integer
+        event:
+          type: string
+        case_id:
+          type: integer
+          nullable: true
+        status:
+          type: string
+        error:
+          type: string
+        duration_ms:
+          type: integer
+        attempt:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - attempt
+      - case_id
+      - created_at
+      - duration_ms
+      - error
+      - event
+      - id
+      - status
+    DashboardDangerCounts:
+      type: object
+      properties:
+        failure:
+          type: integer
+          minimum: 0
+        safe:
+          type: integer
+          minimum: 0
+        inconclusive:
+          type: integer
+          minimum: 0
+        suspicious:
+          type: integer
+          minimum: 0
+        dangerous:
+          type: integer
+          minimum: 0
+        malicious:
+          type: integer
+          minimum: 0
+      required:
+      - dangerous
+      - failure
+      - inconclusive
+      - malicious
+      - safe
+      - suspicious
+    DashboardKpis:
+      type: object
+      properties:
+        new_users:
+          type: integer
+          minimum: 0
+        total_reporters:
+          type: integer
+          minimum: 0
+        total_cases:
+          type: integer
+          minimum: 0
+      required:
+      - new_users
+      - total_cases
+      - total_reporters
+    DashboardPrefix:
+      type: object
+      properties:
+        label:
+          type: string
+        value:
+          type: integer
+          minimum: 0
+      required:
+      - label
+      - value
+    DashboardSummaryResponse:
+      type: object
+      properties:
+        month:
+          type: integer
+          maximum: 12
+          minimum: 1
+        year:
+          type: integer
+          minimum: 1
+        scope:
+          type: string
+        kpis:
+          $ref: '#/components/schemas/DashboardKpis'
+        danger_counts:
+          $ref: '#/components/schemas/DashboardDangerCounts'
+        top_prefixes:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardPrefix'
+      required:
+      - danger_counts
+      - kpis
+      - month
+      - scope
+      - top_prefixes
+      - year
+    EmailFeederState:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - enabled
+      - updated_at
+    EmailFeederStateUpdate:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
+    HomeDangerCounts:
+      type: object
+      properties:
+        safe:
+          type: integer
+        inconclusive:
+          type: integer
+        suspicious:
+          type: integer
+        dangerous:
+          type: integer
+      required:
+      - dangerous
+      - inconclusive
+      - safe
+      - suspicious
+    HomeMonthly:
+      type: object
+      properties:
+        everyone_items:
+          type: integer
+        scope_items:
+          type: integer
+        scope_name:
+          type: string
+          nullable: true
+      required:
+      - everyone_items
+      - scope_items
+    HomeSpotlight:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        cta_label:
+          type: string
+        cta_path:
+          type: string
+      required:
+      - cta_label
+      - cta_path
+      - description
+      - title
+    HomeSuggestedScopes:
+      type: object
+      properties:
+        region:
+          type: string
+          nullable: true
+        country:
+          type: string
+          nullable: true
+        gbu:
+          type: string
+          nullable: true
+    HomeSummaryResponse:
+      type: object
+      properties:
+        show_scope_modal:
+          type: boolean
+        monthly:
+          $ref: '#/components/schemas/HomeMonthly'
+        danger_counts:
+          $ref: '#/components/schemas/HomeDangerCounts'
+        scope_danger_counts:
+          allOf:
+          - $ref: '#/components/schemas/HomeDangerCounts'
+          nullable: true
+        suggested_scopes:
+          $ref: '#/components/schemas/HomeSuggestedScopes'
+        spotlight:
+          $ref: '#/components/schemas/HomeSpotlight'
+      required:
+      - danger_counts
+      - monthly
+      - scope_danger_counts
+      - show_scope_modal
+      - spotlight
+      - suggested_scopes
+    InvestigationDetails:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        reporter_email:
+          type: string
+          format: email
+          readOnly: true
+        status:
+          type: string
+          readOnly: true
+        info:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        tests_done:
+          type: integer
+          readOnly: true
+        type:
+          type: string
+          readOnly: true
+        result:
+          type: string
+          readOnly: true
+        is_challengeable:
+          type: boolean
+        is_challenged:
+          type: boolean
+        mail_preview_url:
+          type: string
+          readOnly: true
+        analyzer_reports:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+        case_infos:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        raw:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        challenge_proposed_result:
+          oneOf:
+          - $ref: '#/components/schemas/ChallengeProposedResultEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        challenge_reason:
+          type: string
+        reporter_context:
+          type: string
+        reporter_note:
+          type: string
+          readOnly: true
+      required:
+      - analyzer_reports
+      - case_infos
+      - created_at
+      - id
+      - info
+      - mail_preview_url
+      - raw
+      - reporter_email
+      - reporter_note
+      - result
+      - status
+      - tests_done
+      - type
+    Login:
+      type: object
+      properties:
+        username:
+          type: string
+          maxLength: 150
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - password
+      - username
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          readOnly: true
+        expiry:
+          type: string
+          format: date-time
+          readOnly: true
+        user:
+          allOf:
+          - $ref: '#/components/schemas/LoginUser'
+          readOnly: true
+      required:
+      - expiry
+      - token
+      - user
+    LoginUser:
+      type: object
+      description: |-
+        Minimal user representation embedded in the login response.
+        Intentionally lighter than AuthenticatedUserSerializer — the login
+        response only needs enough to bootstrap the session.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        groups:
+          type: string
+          readOnly: true
+      required:
+      - groups
+      - id
+      - username
+    LogoutResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+          readOnly: true
+      required:
+      - detail
+    MeResponse:
+      type: object
+      description: |-
+        GET /auth/me/ response — full identity + semantic_colors.
+        Subclasses AuthenticatedUserSerializer; no additional fields needed.
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        groups:
+          type: string
+          readOnly: true
+        ciso_scope:
+          type: string
+          readOnly: true
+        semantic_colors:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        theme:
+          type: string
+          description: |-
+            Returns the user's saved theme name. Falls back to "graphite" if no
+            profile exists yet (new user before first profile creation).
+          readOnly: true
+        auto_seasonal:
+          type: boolean
+          description: |-
+            Returns the user's auto_seasonal preference.
+            Falls back to False so new users get explicit theme control by default.
+          readOnly: true
+      required:
+      - auto_seasonal
+      - ciso_scope
+      - groups
+      - id
+      - semantic_colors
+      - theme
+      - username
+    MonthlyCasesSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        suspicious_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        inconclusive_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        failure_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        dangerous_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        safe_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        challenged_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        allow_listed_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        uncategorized_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        spam_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        newsletter_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        classic_phishing_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        clone_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        blackmail_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        whaling_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        internal_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        external_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        creation_date:
+          type: string
+          format: date-time
+          readOnly: true
+        last_update:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - creation_date
+      - id
+      - last_update
+    MonthlyCasesSummaryAggregate:
+      type: object
+      properties:
+        month:
+          type: integer
+          maximum: 12
+          minimum: 1
+        year:
+          type: integer
+          minimum: 1
+        suspicious_cases:
+          type: integer
+          minimum: 0
+        inconclusive_cases:
+          type: integer
+          minimum: 0
+        failure_cases:
+          type: integer
+          minimum: 0
+        dangerous_cases:
+          type: integer
+          minimum: 0
+        safe_cases:
+          type: integer
+          minimum: 0
+        challenged_cases:
+          type: integer
+          minimum: 0
+        allow_listed_cases:
+          type: integer
+          minimum: 0
+        uncategorized_cases:
+          type: integer
+          minimum: 0
+        spam_cases:
+          type: integer
+          minimum: 0
+        newsletter_cases:
+          type: integer
+          minimum: 0
+        classic_phishing_cases:
+          type: integer
+          minimum: 0
+        clone_cases:
+          type: integer
+          minimum: 0
+        blackmail_cases:
+          type: integer
+          minimum: 0
+        whaling_cases:
+          type: integer
+          minimum: 0
+        internal_cases:
+          type: integer
+          minimum: 0
+        external_cases:
+          type: integer
+          minimum: 0
+      required:
+      - allow_listed_cases
+      - blackmail_cases
+      - challenged_cases
+      - classic_phishing_cases
+      - clone_cases
+      - dangerous_cases
+      - external_cases
+      - failure_cases
+      - inconclusive_cases
+      - internal_cases
+      - month
+      - newsletter_cases
+      - safe_cases
+      - spam_cases
+      - suspicious_cases
+      - uncategorized_cases
+      - whaling_cases
+      - year
+    MonthlyReporterStats:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        new_reporters:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        total_reporters:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        creation_date:
+          type: string
+          format: date-time
+          readOnly: true
+        last_update:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - creation_date
+      - id
+      - last_update
+    PaginatedAnalyzerSettingsList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyzerSettings'
+    PaginatedConnectorDeliveryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectorDelivery'
+    PaginatedMonthlyCasesSummaryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonthlyCasesSummary'
+    PaginatedMonthlyReporterStatsList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonthlyReporterStats'
+    PaginatedSubmissionListList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubmissionList'
+    PaginatedTotalCasesStatsList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/TotalCasesStats'
+    PaginatedUserCasesMonthlyStatsList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserCasesMonthlyStats'
+    PatchedAnalyzerWeightUpdate:
+      type: object
+      properties:
+        weight:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,2}(?:\.\d{0,1})?$
+    PatchedEmailFeederStateUpdate:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+    PatchedInvestigationGlobalEditRequest:
+      type: object
+      properties:
+        score:
+          type: number
+          format: double
+          maximum: 10
+          minimum: 0
+        confidence:
+          type: number
+          format: double
+          maximum: 100
+          minimum: 0
+        classification:
+          $ref: '#/components/schemas/ClassificationEnum'
+    ResultEnum:
+      enum:
+      - SAFE
+      - INCONCLUSIVE
+      - UNCHALLENGED
+      - ALLOW_LISTED
+      - FAILURE
+      - SUSPICIOUS
+      - DANGEROUS
+      - UNKNOWN
+      type: string
+      description: |-
+        * `SAFE` - SAFE
+        * `INCONCLUSIVE` - INCONCLUSIVE
+        * `UNCHALLENGED` - UNCHALLENGED
+        * `ALLOW_LISTED` - ALLOW_LISTED
+        * `FAILURE` - FAILURE
+        * `SUSPICIOUS` - SUSPICIOUS
+        * `DANGEROUS` - DANGEROUS
+        * `UNKNOWN` - UNKNOWN
+    SettingsListBulkCreate:
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            type: string
+      required:
+      - values
+    StatusEnum:
+      enum:
+      - NEW
+      - IN_PROGRESS
+      - DONE
+      - CHALLENGED
+      - UNKNOWN
+      type: string
+      description: |-
+        * `NEW` - NEW
+        * `IN_PROGRESS` - IN_PROGRESS
+        * `DONE` - DONE
+        * `CHALLENGED` - CHALLENGED
+        * `UNKNOWN` - UNKNOWN
+    SubmissionDetails:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          readOnly: true
+        artifact:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        tests_done:
+          type: integer
+          readOnly: true
+        type:
+          allOf:
+          - $ref: '#/components/schemas/TypeEnum'
+          readOnly: true
+        result:
+          allOf:
+          - $ref: '#/components/schemas/ResultEnum'
+          readOnly: true
+        mail_preview_url:
+          type: string
+          readOnly: true
+          nullable: true
+        is_challengeable:
+          type: boolean
+        is_challenged:
+          type: boolean
+        analyzer_reports:
+          type: string
+          readOnly: true
+        case_infos:
+          type: string
+          readOnly: true
+        url_artifacts:
+          type: string
+          readOnly: true
+        challenge_proposed_result:
+          oneOf:
+          - $ref: '#/components/schemas/ChallengeProposedResultEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        challenge_reason:
+          type: string
+      required:
+      - analyzer_reports
+      - artifact
+      - case_infos
+      - created_at
+      - id
+      - mail_preview_url
+      - result
+      - status
+      - tests_done
+      - type
+      - url_artifacts
+    SubmissionList:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/StatusEnum'
+          readOnly: true
+        artifact:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        tests_done:
+          type: integer
+          readOnly: true
+        type:
+          allOf:
+          - $ref: '#/components/schemas/TypeEnum'
+          readOnly: true
+        result:
+          allOf:
+          - $ref: '#/components/schemas/ResultEnum'
+          readOnly: true
+        mail_preview_url:
+          type: string
+          readOnly: true
+          nullable: true
+        is_challengeable:
+          type: boolean
+        is_challenged:
+          type: boolean
+      required:
+      - artifact
+      - created_at
+      - id
+      - mail_preview_url
+      - result
+      - status
+      - tests_done
+      - type
+    SubmitFile:
+      type: object
+      properties:
+        context:
+          type: string
+          nullable: true
+          maxLength: 2000
+        file:
+          type: string
+          format: uri
+      required:
+      - file
+    SubmitOther:
+      type: object
+      properties:
+        context:
+          type: string
+          nullable: true
+          maxLength: 2000
+        value:
+          type: string
+          maxLength: 255
+      required:
+      - value
+    SubmitUrl:
+      type: object
+      properties:
+        context:
+          type: string
+          nullable: true
+          maxLength: 2000
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+      required:
+      - url
+    TotalCasesStats:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        total_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        creation_date:
+          type: string
+          format: date-time
+          readOnly: true
+        last_update:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - creation_date
+      - id
+      - last_update
+    TypeEnum:
+      enum:
+      - FILE
+      - MAIL
+      - URL
+      - IP
+      - HASH
+      - UNKNOWN
+      type: string
+      description: |-
+        * `FILE` - FILE
+        * `MAIL` - MAIL
+        * `URL` - URL
+        * `IP` - IP
+        * `HASH` - HASH
+        * `UNKNOWN` - UNKNOWN
+    UserCasesMonthlyStats:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        user:
+          type: string
+          readOnly: true
+        month:
+          type: string
+          maxLength: 200
+        year:
+          type: string
+          maxLength: 200
+        total_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        suspicious_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        inconclusive_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        failure_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        dangerous_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        safe_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        challenged_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        allow_listed_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        uncategorized_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        spam_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        newsletter_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        classic_phishing_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        clone_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        blackmail_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        whaling_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        internal_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        external_cases:
+          type: integer
+          maximum: 4294967295
+          minimum: 0
+          format: int64
+        creation_date:
+          type: string
+          format: date-time
+          readOnly: true
+        last_update:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - creation_date
+      - id
+      - last_update
+      - month
+      - user
+      - year
+    UserCasesMonthlyStatsAggregateRow:
+      type: object
+      properties:
+        username:
+          type: string
+        month:
+          type: integer
+          maximum: 12
+          minimum: 1
+        year:
+          type: integer
+          minimum: 1
+        total_cases:
+          type: integer
+          minimum: 0
+        total_safe:
+          type: integer
+          minimum: 0
+        total_dangerous:
+          type: integer
+          minimum: 0
+        total_suspicious:
+          type: integer
+          minimum: 0
+        total_inconclusive:
+          type: integer
+          minimum: 0
+        total_failure:
+          type: integer
+          minimum: 0
+        total_uncategorized:
+          type: integer
+          minimum: 0
+        total_spam:
+          type: integer
+          minimum: 0
+        total_newsletter:
+          type: integer
+          minimum: 0
+        total_classic_phishing:
+          type: integer
+          minimum: 0
+        total_clone:
+          type: integer
+          minimum: 0
+        total_blackmail:
+          type: integer
+          minimum: 0
+        total_whaling:
+          type: integer
+          minimum: 0
+        total_internal:
+          type: integer
+          minimum: 0
+        total_external:
+          type: integer
+          minimum: 0
+        total_challenged:
+          type: integer
+          minimum: 0
+        total_allow_listed:
+          type: integer
+          minimum: 0
+      required:
+      - month
+      - total_allow_listed
+      - total_blackmail
+      - total_cases
+      - total_challenged
+      - total_classic_phishing
+      - total_clone
+      - total_dangerous
+      - total_external
+      - total_failure
+      - total_inconclusive
+      - total_internal
+      - total_newsletter
+      - total_safe
+      - total_spam
+      - total_suspicious
+      - total_uncategorized
+      - total_whaling
+      - username
+      - year
+  securitySchemes:
+    knoxApiToken:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Token-based authentication with required prefix "Token"

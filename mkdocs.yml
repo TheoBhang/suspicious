@@ -35,6 +35,7 @@ exclude_docs: |
   superpowers/
   plans/
   specs/
+  audit/
 
 validation:
   links:

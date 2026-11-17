@@ -49,6 +49,13 @@ class CortexManifestTest(TestCase):
         self.assertFalse(status.ok)
         self.assertIn("api key rejected", status.detail)
 
+    def test_health_other_http_errors_are_not_read_as_an_empty_catalogue(self):
+        cfg = {**CONFIGURED, "analyzers": {"yara": "Y"}}
+        for code in (404, 429, 503):
+            with mock.patch("requests.get", return_value=self._listing([], status=code)):
+                status = CortexConnector(cfg).health_check()
+            self.assertEqual((status.ok, status.detail), (False, f"HTTP {code}"))
+
     def test_health_names_roles_cortex_does_not_offer(self):
         cfg = {**CONFIGURED, "analyzers": {"yara": "Gone", "header": "H"}}
         with mock.patch("requests.get", return_value=self._listing(["H"])):

@@ -69,9 +69,9 @@ class CortexConnector(Connector):
             )
             if response.status_code in (401, 403):
                 return HealthStatus(ok=False, detail=f"api key rejected (HTTP {response.status_code})")
-            if response.status_code >= 500:
+            if not response.ok:  # any other 4xx/5xx: do not read an error page as "no analyzers"
                 return HealthStatus(ok=False, detail=f"HTTP {response.status_code}")
-            offered = {a.get("name") for a in response.json()} if response.ok else set()
+            offered = {a.get("name") for a in response.json()}
         except Exception as exc:  # noqa: BLE001: a health check must not raise
             return HealthStatus(ok=False, detail=str(exc))
         absent = sorted(

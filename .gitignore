@@ -59,6 +59,7 @@ suspicious-ui/public/brand/*.svg
 chromadb
 elasticsearch
 cortex
+!Suspicious/Suspicious/connectors/contrib/cortex/
 minio
 db_suspicious/data
 backup

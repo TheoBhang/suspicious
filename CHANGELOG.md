@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `cortex` connector (category Analysis, provides `analysis`): Cortex config, health and the 60 s analyzer sync now live in the connector framework, using the existing `integrations.cortex` section. `Analyzer` gains a `source` column; disabling the last enabled analysis connector needs `force: true` (409 `last_analysis_connector` otherwise). Job starts are unchanged and still go to Cortex whatever the enabled flag says.
 - Settings "AI model" card for Admins, shown while the `ai_model` connector is enabled: connector
   health, circuit breaker state with a reset, active version and age, label counts, the retrain
   schedule and a Retrain button, the latest candidate with its gate checks, the shadow comparison

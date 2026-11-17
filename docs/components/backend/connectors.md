@@ -1,14 +1,27 @@
 # connectors
 
 Plugin framework every integration with an external system is built on. The
-ten built-in connectors are `thehive`, `misp`, `watcher`, `smtp_notify`,
-`chromadb`, `ai_narration`, `case_search`, `elastic_siem`, `xsoar` and
-`ai_model`. The framework provides registry, event dispatch, retry + circuit breaker, and a
+eleven built-in connectors are `thehive`, `misp`, `watcher`, `smtp_notify`,
+`chromadb`, `ai_narration`, `case_search`, `elastic_siem`, `xsoar`,
+`ai_model` and `cortex`. The framework provides registry, event dispatch, retry + circuit breaker, and a
 `ConnectorDelivery` audit ledger.
 
 See [`Suspicious/Suspicious/connectors/README.md`](https://github.com/thalesgroup-cert/suspicious/blob/main/Suspicious/Suspicious/connectors/README.md)
 for the framework internals and the built-in connector table, and
 [Connectors (author guide)](../../connectors.md) for writing a new one.
+
+## cortex
+
+Category Analysis, provides `analysis`, enabled by default. Config is the existing
+`integrations.cortex` section (`url`, `api_key`, `webhook_secret`, `stale_job_timeout_seconds`,
+`analyzers.*`), so `settings.json` needs no change. The connector syncs the analyzer catalogue
+into the `Analyzer` table every 60 s (the old `sync-cortex` beat entry is gone; the `sync_cortex`
+task forwards to it) and reports health from `GET <url>/api/status`; unconfigured, it reports not
+ok and the sync does nothing. Each `Analyzer` row has a `source` naming its owning connector, and
+the sync only deactivates `cortex` rows. Disabling the last enabled `analysis` connector needs
+`"force": true` on `PATCH /api/connectors/<name>/` (otherwise 409, code `last_analysis_connector`).
+Known limit: the enabled flag gates only the sync and the UI; job starts, the webhook and
+reconcile still use Cortex whatever it says.
 
 ## ai_model
 

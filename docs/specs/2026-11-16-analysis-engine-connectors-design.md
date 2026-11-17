@@ -214,8 +214,8 @@ The webhook stays accepted when the connector is disabled, so jobs already runni
 
 ### What is recorded
 
-`ConnectorDelivery` gets a row for each analyzer sync (already the case for any scheduled
-sync) and for each **failed** `start`, with the analyzer name in the error. A successful start
+`ConnectorDelivery` gets a row for each failed analyzer sync and, at most once an hour, a
+successful one (a 60 s sync would otherwise add about 1,400 rows a day) and for each **failed** `start`, with the analyzer name in the error. A successful start
 is already recorded by its `CaseAnalyzerJob` row, and fetches are too frequent to log.
 
 ### Compatibility kept on purpose

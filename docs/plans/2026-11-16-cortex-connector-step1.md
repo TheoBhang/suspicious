@@ -72,7 +72,7 @@ Known limit, stated so nobody is surprised: in this step the `enabled` flag gate
 
 - [ ] **Step 1: Write failing tests:**
   - `test_new_analyzer_defaults_to_cortex_source`.
-  - `test_migration_marks_provider_rows_ai_model`: rows with `analyzer_cortex_id` starting `provider:` become `ai_model`; all others `cortex`.
+  - `test_migration_marks_provider_rows_ai_model`: rows with `analyzer_cortex_id` starting `provider:`, and the row named by `ai_analyzer_name()`, become `ai_model`; all others `cortex`.
   - `test_sync_creates_rows_with_source_cortex` and `test_sync_deactivates_only_cortex_rows`: an `ai_model` row and a row with `source="other"` stay `is_active=True` when absent from the remote list; a `cortex` row absent from it goes inactive.
   - `test_sync_still_spares_the_configured_ai_analyzer_name` (the existing behaviour, kept).
   - `test_queue_provider_analysis_creates_the_row_with_source_ai_model`.
@@ -88,7 +88,7 @@ Known limit, stated so nobody is surprised: in this step the `enabled` flag gate
 - Modify: `Suspicious/Suspicious/connectors/contrib/__init__.py` (`BUILTIN_CONNECTOR_PATHS`)
 - Modify: `Suspicious/Suspicious/suspicious/settings.py` (remove the `"sync-cortex"` entry of `CELERY_BEAT_SCHEDULE`)
 - Modify: `Suspicious/Suspicious/tasp/tasks.py` (`sync_cortex` body)
-- Modify: `docs/components/backend/connectors.md` (add Cortex), `CHANGELOG.md`
+- Modify: `docs/components/backend/connectors.md` (add Cortex), `CHANGELOG.md`, `Suspicious/Suspicious/tasp/README.md` (the beat table row)
 - Test: `Suspicious/Suspicious/connectors/tests/test_contrib_cortex.py` (new, style of `test_contrib_watcher.py`)
 
 **Interfaces:**
@@ -132,7 +132,7 @@ Known limit, stated so nobody is surprised: in this step the `enabled` flag gate
 - Test: `Suspicious/Suspicious/connectors/tests/test_contrib_cortex.py` (add `UpgradeTests`)
 
 - [ ] **Step 1: Before any task's code lands**, on the base commit record `ww stack backtest suspicious` output to `docs/plans/.evidence/cortex-step1-backtest-before.txt` (git-ignored, not committed).
-- [ ] **Step 2: Write `UpgradeTests`:** with `integrations.cortex` set exactly as in `docs/getting-started/examples/Suspicious-settings.example.json`, `registry.instantiate("cortex").config` carries `url`, `api_key` and the five `analyzers.*` names; `_serialize_connector("cortex")["status"] == "connected"`; `GET /api/connectors/` lists `cortex` enabled.
+- [ ] **Step 2: Write `UpgradeTests`:** with `integrations.cortex` set exactly as in `docs/getting-started/examples/Suspicious-settings.example.json`, `registry.instantiate("cortex").config` (with a non-empty `api_key`: the example ships it empty, which reads as `partial`, since `api_key` is required) carries `url`, `api_key` and the five `analyzers.*` names; `_serialize_connector("cortex")["status"] == "connected"`; `GET /api/connectors/` lists `cortex` enabled.
 - [ ] **Step 3: Run** the full suite `ww test backend`; expect only the known GCS import errors if the image lacks `google-cloud-storage`, and say so.
 - [ ] **Step 4: Run** the backtest again and `diff` against step 1's file; expected: no difference.
 - [ ] **Step 5: Commit** `test(connectors): cover the cortex connector upgrade path`.
@@ -142,3 +142,18 @@ Known limit, stated so nobody is surprised: in this step the `enabled` flag gate
 - **Spec coverage:** manifest, config schema, health, schedule, `Analyzer.source` (migration backfill, sync scoping, AI row), `analysis` kind with no one-per-kind cap, the guard with `force`, the warning log, UI confirmation, upgrade test, backtest identical. Not in this step by design: `engines.py`, the contract operations, webhook route, `fail_stale_jobs` per engine, delivery rows for failed starts.
 - **Deviation from the spec text:** the guard message does not claim new cases get no analysis, because in step 1 they still do; the spec's wording applies from step 2. The message keeps the spec's intent and names the sync.
 - **Name consistency:** `PROVIDER_KIND_ANALYSIS`, `last_analysis_connector`, `CortexConnector`, `Analyzer.source`, `setConnectorEnabled(name, enabled, force?)` are used the same way in every task.
+
+## Amendments after the first audit and the cloud review
+
+Built, and tested, beyond the tasks above:
+
+- The sync refuses an analyzer name another source owns (spec: refused, not merged).
+- `sync_cortex_analyzers(strict=True)` re-raises a fetch failure, so a failed sync is a failed
+  delivery and is retried; in strict mode it skips its own use of the `cortex` breaker, because
+  `run_sync_now` already runs the sync under it.
+- `run_sync_now` logs a successful sync at most once an hour (and the first success after a
+  failure); a 60 s sync would otherwise add about 1,400 ledger rows a day.
+- Health probes `GET /api/analyzer` with the key, lists roles Cortex does not offer, and reports
+  inactive analyzers, jobs pending over 30 minutes and the age of the last webhook.
+- The webhook reads `webhook_secret` from the connector config (setting as fallback).
+- Toggling a connector locks that kind's state rows so the last-engine guard cannot race.

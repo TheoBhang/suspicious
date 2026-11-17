@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import requests
 from django.db import transaction
@@ -20,7 +21,7 @@ _cortex_breaker = get_breaker("cortex")
 
 
 @RETRY
-def _fetch_all_analyzers(api):
+def _fetch_all_analyzers(api, guarded: bool = True):
     """Fetch every analyzer enabled for the org, with retry and circuit
     breaker.
 
@@ -30,7 +31,9 @@ def _fetch_all_analyzers(api):
     silently never updated a single Analyzer row. GET /api/analyzer (what
     get_by_type/the Cortex UI itself use) is the one that actually works.
     """
-    with _cortex_breaker.calling():
+    # guarded=False when the caller already runs under the "cortex" breaker (the connector
+    # sync via run_sync_now): the same breaker counted twice would trip early.
+    with _cortex_breaker.calling() if guarded else contextlib.nullcontext():
         data = api.do_get("analyzer", params={"range": "all"}).json()
         return [CortexAnalyzer(item) for item in data]
 
@@ -54,7 +57,7 @@ def sync_cortex_analyzers(config_path: str = CONFIG_PATH, strict: bool = False) 
     api = SessionCortexApi(str(cfg.cortex.url).rstrip("/"), cfg.cortex.api_key)
 
     try:
-        remote_analyzers = _fetch_all_analyzers(api)
+        remote_analyzers = _fetch_all_analyzers(api, guarded=not strict)
     except pybreaker.CircuitBreakerError as exc:
         log_analyzers.warning("[breaker:cortex] open, sync_cortex_analyzers skipped: %s", exc)
         if strict:

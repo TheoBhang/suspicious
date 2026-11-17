@@ -119,6 +119,42 @@ class CortexManifestTest(TestCase):
                 run_sync_now("cortex")
         self.assertEqual(ConnectorDelivery.objects.get(connector="cortex").status, "failed")
 
+    def test_a_60s_sync_logs_one_success_an_hour_and_every_failure(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from connectors.delivery import RetryableDeliveryError, run_sync_now
+        from connectors.models import ConnectorDelivery
+
+        registry.discover()
+        rows = lambda: ConnectorDelivery.objects.filter(connector="cortex", event="sync")
+        with mock.patch.object(CortexConnector, "sync"):
+            run_sync_now("cortex")
+            run_sync_now("cortex")
+            self.assertEqual(rows().count(), 1)  # the second success is not logged
+            rows().update(created_at=timezone.now() - timedelta(hours=2))
+            run_sync_now("cortex")
+            self.assertEqual(rows().count(), 2)  # an hour on, one more
+        with mock.patch.object(CortexConnector, "sync", side_effect=OSError("down")):
+            with self.assertRaises(RetryableDeliveryError):
+                run_sync_now("cortex")
+        with mock.patch.object(CortexConnector, "sync"):
+            run_sync_now("cortex")
+        self.assertEqual(list(rows().order_by("id").values_list("status", flat=True)),
+                         ["success", "success", "failed", "success"])  # recovery is logged at once
+
+    def test_the_connector_sync_does_not_count_the_shared_breaker_twice(self):
+        from tasp.cron import sync_cortex
+        remote = mock.Mock(name="a", id="1")
+        remote.name = "A1"
+        with mock.patch.object(sync_cortex, "load_config") as load, \
+                mock.patch.object(sync_cortex, "_fetch_all_analyzers", return_value=[remote]) as fetch:
+            load.return_value.cortex.url = "http://cortex:9001"
+            load.return_value.cortex.api_key = "k"
+            sync_cortex.sync_cortex_analyzers(strict=True)
+            self.assertIs(fetch.call_args.kwargs["guarded"], False)
+            sync_cortex.sync_cortex_analyzers()
+            self.assertIs(fetch.call_args.kwargs["guarded"], True)
+
     def test_sync_when_unconfigured_does_nothing(self):
         with mock.patch("tasp.cron.sync_cortex.sync_cortex_analyzers") as run:
             CortexConnector({}).sync()

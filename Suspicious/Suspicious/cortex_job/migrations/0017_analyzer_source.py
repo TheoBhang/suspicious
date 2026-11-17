@@ -2,9 +2,18 @@ from django.db import migrations, models
 
 
 def mark_provider_rows(apps, schema_editor):
-    apps.get_model("cortex_job", "Analyzer").objects.filter(
-        analyzer_cortex_id__startswith="provider:"
-    ).update(source="ai_model")
+    from django.db.models import Q
+
+    analyzer = apps.get_model("cortex_job", "Analyzer")
+    try:
+        from cortex_job.cortex_utils.cortex_and_job_management import ai_analyzer_name
+        ai_name = ai_analyzer_name()
+    except Exception:  # config unreadable at migrate time: fall back to the prefix alone
+        ai_name = None
+    match = Q(analyzer_cortex_id__startswith="provider:")
+    if ai_name:
+        match |= Q(name=ai_name)
+    analyzer.objects.filter(match).update(source="ai_model")
 
 
 class Migration(migrations.Migration):

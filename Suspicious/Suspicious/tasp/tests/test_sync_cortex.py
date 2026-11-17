@@ -138,7 +138,9 @@ class WarnOnUnresolvedConfiguredAnalyzersTests(TestCase):
         self.assertTrue(ai_row.is_active)
 
 
-class SyncCortexSourceTests(SyncCortexAnalyzersTests):
+class SyncCortexSourceTests(TestCase):
+    _run_with_fake_analyzers = SyncCortexAnalyzersTests._run_with_fake_analyzers
+
     def test_sync_creates_rows_with_source_cortex(self):
         self._run_with_fake_analyzers([{"name": "A1", "id": "id1"}])
         self.assertEqual(Analyzer.objects.get(name="A1").source, "cortex")
@@ -157,3 +159,18 @@ class SyncCortexSourceTests(SyncCortexAnalyzersTests):
         Analyzer.objects.create(name=ai_analyzer_name(), analyzer_cortex_id="legacy")
         self._run_with_fake_analyzers([{"name": "A1", "id": "id1"}])
         self.assertTrue(Analyzer.objects.get(name=ai_analyzer_name()).is_active)
+
+    def test_a_name_owned_by_another_source_is_not_taken_over(self):
+        Analyzer.objects.create(name="Dup", analyzer_cortex_id="provider:Dup", source="ai_model")
+        self._run_with_fake_analyzers([{"name": "Dup", "id": "cortex-id"}])
+        row = Analyzer.objects.get(name="Dup")
+        self.assertEqual((row.source, row.analyzer_cortex_id), ("ai_model", "provider:Dup"))
+
+    def test_strict_reraises_a_fetch_failure_and_default_swallows_it(self):
+        import requests
+        with patch("tasp.cron.sync_cortex.load_config", return_value=_fake_cron_config()), \
+                patch("tasp.cron.sync_cortex._fetch_all_analyzers",
+                      side_effect=requests.ConnectionError("down")):
+            self.assertIsNone(sync_cortex_analyzers())
+            with self.assertRaises(requests.ConnectionError):
+                sync_cortex_analyzers(strict=True)

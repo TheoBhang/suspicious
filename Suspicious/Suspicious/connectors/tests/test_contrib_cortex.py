@@ -1,6 +1,6 @@
 from unittest import mock
 
-from django.test import SimpleTestCase, TestCase
+from django.test import TestCase
 
 from connectors.contrib.cortex.connector import CortexConnector
 from connectors.delivery import get_state
@@ -9,7 +9,7 @@ from connectors.registry import registry
 CONFIGURED = {"url": "http://cortex:9001", "api_key": "k"}
 
 
-class CortexManifestTest(SimpleTestCase):
+class CortexManifestTest(TestCase):
     def test_manifest(self):
         m = CortexConnector.manifest
         m.validate()
@@ -30,13 +30,54 @@ class CortexManifestTest(SimpleTestCase):
         self.assertEqual(fields["stale_job_timeout_seconds"].default, 7200)
         self.assertTrue(fields["url"].required and fields["api_key"].required)
 
-    def test_health_ok_on_status_200(self):
-        with mock.patch("requests.get", return_value=mock.Mock(status_code=200)) as get:
-            status = CortexConnector(CONFIGURED).health_check()
-        self.assertTrue(status.ok)
-        self.assertEqual(get.call_args.args[0], "http://cortex:9001/api/status")
+    def _listing(self, names, status=200):
+        return mock.Mock(status_code=status, ok=status < 400, json=lambda: [{"name": n} for n in names])
+
+    def test_health_ok_lists_analyzers_with_the_key(self):
+        cfg = {**CONFIGURED, "analyzers": {"yara": "Y", "ai": "not-in-cortex"}}
+        with mock.patch("requests.get", return_value=self._listing(["Y", "Z"])) as get:
+            status = CortexConnector(cfg).health_check()
+        self.assertTrue(status.ok, status.detail)
+        self.assertIn("2 analyzers offered", status.detail)
+        self.assertEqual(get.call_args.args[0], "http://cortex:9001/api/analyzer")
+        self.assertEqual(get.call_args.kwargs["headers"], {"Authorization": "Bearer k"})
         self.assertEqual(get.call_args.kwargs["timeout"], 2)
 
+    def test_health_not_ok_when_the_key_is_rejected(self):
+        with mock.patch("requests.get", return_value=self._listing([], status=401)):
+            status = CortexConnector(CONFIGURED).health_check()
+        self.assertFalse(status.ok)
+        self.assertIn("api key rejected", status.detail)
+
+    def test_health_names_roles_cortex_does_not_offer(self):
+        cfg = {**CONFIGURED, "analyzers": {"yara": "Gone", "header": "H"}}
+        with mock.patch("requests.get", return_value=self._listing(["H"])):
+            status = CortexConnector(cfg).health_check()
+        self.assertFalse(status.ok)
+        self.assertIn("yara=Gone", status.detail)
+        self.assertNotIn("header=H", status.detail)
+
+    def test_health_reports_stuck_jobs_and_webhook_age(self):
+        from datetime import timedelta
+        from django.core.cache import cache
+        from django.utils import timezone
+        from cortex_job.models import Analyzer, CaseAnalyzerJob
+        from django.contrib.auth import get_user_model
+        from case_handler.models import Case
+
+        analyzer = Analyzer.objects.create(name="A1", analyzer_cortex_id="c1")
+        case = Case.objects.create(
+            status="On Going", description="",
+            reporter=get_user_model().objects.create_user(username="r", password="x"),
+        )
+        job = CaseAnalyzerJob.objects.create(case=case, cortex_job_id="j1", analyzer=analyzer)
+        CaseAnalyzerJob.objects.filter(pk=job.pk).update(created_at=timezone.now() - timedelta(hours=1))
+        cache.set("cortex_last_webhook_at", __import__("time").time() - 300)
+        with mock.patch("requests.get", return_value=self._listing(["A1"])):
+            status = CortexConnector(CONFIGURED).health_check()
+        self.assertIn("1 jobs pending over 30 min", status.detail)
+        self.assertIn("last webhook 5 min ago", status.detail)
+        cache.delete("cortex_last_webhook_at")
     def test_health_not_ok_on_connection_error(self):
         with mock.patch("requests.get", side_effect=OSError("down")):
             self.assertFalse(CortexConnector(CONFIGURED).health_check().ok)
@@ -53,7 +94,23 @@ class CortexManifestTest(SimpleTestCase):
     def test_sync_calls_sync_cortex_analyzers(self):
         with mock.patch("tasp.cron.sync_cortex.sync_cortex_analyzers") as run:
             CortexConnector(CONFIGURED).sync()
-        run.assert_called_once_with()
+        run.assert_called_once_with(strict=True)
+
+    def test_sync_failure_reaches_the_delivery_ledger(self):
+        from connectors.delivery import RetryableDeliveryError, run_sync_now
+        from connectors.models import ConnectorDelivery
+        import requests
+
+        registry.discover()
+        with mock.patch("settings.config.get_section", return_value=CONFIGURED), \
+                mock.patch("tasp.cron.sync_cortex._fetch_all_analyzers",
+                           side_effect=requests.ConnectionError("down")), \
+                mock.patch("tasp.cron.sync_cortex.load_config") as load:
+            load.return_value.cortex.url = "http://cortex:9001"
+            load.return_value.cortex.api_key = "k"
+            with self.assertRaises(RetryableDeliveryError):  # the task retries the sync
+                run_sync_now("cortex")
+        self.assertEqual(ConnectorDelivery.objects.get(connector="cortex").status, "failed")
 
     def test_sync_when_unconfigured_does_nothing(self):
         with mock.patch("tasp.cron.sync_cortex.sync_cortex_analyzers") as run:

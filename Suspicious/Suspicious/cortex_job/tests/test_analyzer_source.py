@@ -18,3 +18,10 @@ class AnalyzerSourceTests(TestCase):
         mod.mark_provider_rows(apps, None)
         self.assertEqual(Analyzer.objects.get(name="AI").source, "ai_model")
         self.assertEqual(Analyzer.objects.get(name="Y").source, "cortex")
+
+    def test_migration_marks_the_ai_vote_row_by_name(self):
+        from cortex_job.cortex_utils.cortex_and_job_management import ai_analyzer_name
+        mod = importlib.import_module("cortex_job.migrations.0017_analyzer_source")
+        Analyzer.objects.create(name=ai_analyzer_name(), analyzer_cortex_id="legacy-cortex-id")
+        mod.mark_provider_rows(apps, None)
+        self.assertEqual(Analyzer.objects.get(name=ai_analyzer_name()).source, "ai_model")

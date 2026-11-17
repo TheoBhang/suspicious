@@ -16,8 +16,12 @@ Category Analysis, provides `analysis`, enabled by default. Config is the existi
 `integrations.cortex` section (`url`, `api_key`, `webhook_secret`, `stale_job_timeout_seconds`,
 `analyzers.*`), so `settings.json` needs no change. The connector syncs the analyzer catalogue
 into the `Analyzer` table every 60 s (the old `sync-cortex` beat entry is gone; the `sync_cortex`
-task forwards to it) and reports health from `GET <url>/api/status`; unconfigured, it reports not
-ok and the sync does nothing. Each `Analyzer` row has a `source` naming its owning connector, and
+task forwards to it) and reports health from `GET <url>/api/analyzer` with the API key, so a rejected key shows
+as not ok. The health detail also lists configured `analyzers.*` roles Cortex does not offer,
+the inactive analyzer count, jobs pending over 30 minutes and the age of the last webhook (an
+early sign of a broken callback). A failed sync is a failed delivery and is retried. The
+webhook reads `webhook_secret` from the connector config, so an edit applies without a restart.
+Unconfigured, it reports not ok and the sync does nothing. Each `Analyzer` row has a `source` naming its owning connector, and
 the sync only deactivates `cortex` rows. Disabling the last enabled `analysis` connector needs
 `"force": true` on `PATCH /api/connectors/<name>/` (otherwise 409, code `last_analysis_connector`).
 Known limit: the enabled flag gates only the sync and the UI; job starts, the webhook and

@@ -59,17 +59,53 @@ class CortexConnector(Connector):
             return HealthStatus(ok=False, detail=f"not configured: {missing}")
         try:
             import requests
+            # The analyzer list needs the key (/api/status does not), so this also proves it.
             response = requests.get(
-                f"{self.config['url'].rstrip('/')}/api/status",
+                f"{self.config['url'].rstrip('/')}/api/analyzer",
+                params={"range": "all"},
+                headers={"Authorization": f"Bearer {self.config['api_key']}"},
                 timeout=2,
                 proxies={"http": "", "https": ""},
             )
-            return HealthStatus(ok=response.status_code < 500, detail=f"HTTP {response.status_code}")
+            if response.status_code in (401, 403):
+                return HealthStatus(ok=False, detail=f"api key rejected (HTTP {response.status_code})")
+            if response.status_code >= 500:
+                return HealthStatus(ok=False, detail=f"HTTP {response.status_code}")
+            offered = {a.get("name") for a in response.json()} if response.ok else set()
         except Exception as exc:  # noqa: BLE001: a health check must not raise
             return HealthStatus(ok=False, detail=str(exc))
+        absent = sorted(
+            f"{role}={name}" for role, name in (self.config.get("analyzers") or {}).items()
+            if role != "ai" and name and name not in offered
+        )
+        detail = f"{len(offered)} analyzers offered; {self._stats()}"
+        if absent:
+            return HealthStatus(ok=False, detail=f"roles not offered by Cortex: {', '.join(absent)}; {detail}")
+        return HealthStatus(ok=True, detail=detail)
+
+    @staticmethod
+    def _stats() -> str:
+        """Early signs of a broken webhook: old pending jobs and a quiet callback."""
+        import time
+        from datetime import timedelta
+
+        from django.core.cache import cache
+        from django.utils import timezone
+
+        from cortex_job.models import Analyzer, CaseAnalyzerJob
+
+        inactive = Analyzer.objects.filter(source="cortex", is_active=False).count()
+        stuck = CaseAnalyzerJob.objects.filter(
+            analyzer__source="cortex",
+            status__in=CaseAnalyzerJob.PENDING_STATUSES,
+            created_at__lt=timezone.now() - timedelta(minutes=30),
+        ).count()
+        last = cache.get("cortex_last_webhook_at")
+        webhook = f"last webhook {int((time.time() - last) // 60)} min ago" if last else "no webhook seen"
+        return f"{inactive} inactive, {stuck} jobs pending over 30 min, {webhook}"
 
     def sync(self) -> None:
         if self._missing():
             return
         from tasp.cron.sync_cortex import sync_cortex_analyzers
-        sync_cortex_analyzers()
+        sync_cortex_analyzers(strict=True)

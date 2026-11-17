@@ -98,3 +98,4 @@ Thumbs.db
 .env.data
 .env.pre-db-auth.*
 .env.data.pre-db-auth.*
+docs/plans/.evidence/

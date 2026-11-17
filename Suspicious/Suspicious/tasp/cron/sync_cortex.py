@@ -35,7 +35,10 @@ def _fetch_all_analyzers(api):
         return [CortexAnalyzer(item) for item in data]
 
 
-def sync_cortex_analyzers(config_path: str = CONFIG_PATH) -> None:
+def sync_cortex_analyzers(config_path: str = CONFIG_PATH, strict: bool = False) -> int | None:
+    """Mirror the Cortex catalogue into ``Analyzer``. Returns the number of analyzers
+    synced. A fetch failure is logged and swallowed, unless ``strict`` (the connector
+    sync), which re-raises it so the delivery ledger records a failure."""
     cfg: CronConfig = load_config(config_path)
     if not cfg.cortex:
         log_analyzers.error("Missing Cortex config")
@@ -54,20 +57,32 @@ def sync_cortex_analyzers(config_path: str = CONFIG_PATH) -> None:
         remote_analyzers = _fetch_all_analyzers(api)
     except pybreaker.CircuitBreakerError as exc:
         log_analyzers.warning("[breaker:cortex] open, sync_cortex_analyzers skipped: %s", exc)
+        if strict:
+            raise
         return
     except CortexException as exc:
         log_analyzers.error("Cortex fetch failed: %s", exc)
+        if strict:
+            raise
         return
     except requests.RequestException as exc:
         log_analyzers.error("Network error syncing Cortex analyzers: %s", exc)
+        if strict:
+            raise
         return
 
     if not remote_analyzers:
-        return
+        return 0
 
     remote_names = []
     with transaction.atomic():
         for analyzer in remote_analyzers:
+            owner = Analyzer.objects.filter(name=analyzer.name).values_list("source", flat=True).first()
+            if owner is not None and owner != "cortex":
+                # Analyzer.name is unique across sources: another connector owns this one.
+                log_analyzers.error(
+                    "Cortex offers analyzer %r but it belongs to %r; skipped.", analyzer.name, owner)
+                continue
             Analyzer.objects.update_or_create(
                 name=analyzer.name,
                 defaults={"analyzer_cortex_id": analyzer.id, "is_active": True, "source": "cortex"},
@@ -84,6 +99,7 @@ def sync_cortex_analyzers(config_path: str = CONFIG_PATH) -> None:
         Analyzer.objects.filter(source="cortex").exclude(name__in=[*remote_names, ai_analyzer_name()]).update(is_active=False)
 
     _warn_on_unresolved_configured_analyzers(remote_names)
+    return len(remote_names)
 
 
 def _warn_on_unresolved_configured_analyzers(remote_names: list[str]) -> None:

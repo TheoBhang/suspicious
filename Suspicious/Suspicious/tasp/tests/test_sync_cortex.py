@@ -136,3 +136,24 @@ class WarnOnUnresolvedConfiguredAnalyzersTests(TestCase):
         mock_error.assert_not_called()
         ai_row.refresh_from_db()
         self.assertTrue(ai_row.is_active)
+
+
+class SyncCortexSourceTests(SyncCortexAnalyzersTests):
+    def test_sync_creates_rows_with_source_cortex(self):
+        self._run_with_fake_analyzers([{"name": "A1", "id": "id1"}])
+        self.assertEqual(Analyzer.objects.get(name="A1").source, "cortex")
+
+    def test_sync_deactivates_only_cortex_rows(self):
+        Analyzer.objects.create(name="gone", analyzer_cortex_id="g")
+        Analyzer.objects.create(name="ai", analyzer_cortex_id="provider:ai", source="ai_model")
+        Analyzer.objects.create(name="oth", analyzer_cortex_id="o", source="other")
+        self._run_with_fake_analyzers([{"name": "A1", "id": "id1"}])
+        self.assertFalse(Analyzer.objects.get(name="gone").is_active)
+        self.assertTrue(Analyzer.objects.get(name="ai").is_active)
+        self.assertTrue(Analyzer.objects.get(name="oth").is_active)
+
+    def test_sync_still_spares_the_configured_ai_analyzer_name(self):
+        from cortex_job.cortex_utils.cortex_and_job_management import ai_analyzer_name
+        Analyzer.objects.create(name=ai_analyzer_name(), analyzer_cortex_id="legacy")
+        self._run_with_fake_analyzers([{"name": "A1", "id": "id1"}])
+        self.assertTrue(Analyzer.objects.get(name=ai_analyzer_name()).is_active)

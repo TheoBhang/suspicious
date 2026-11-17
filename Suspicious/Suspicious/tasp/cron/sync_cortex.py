@@ -70,17 +70,18 @@ def sync_cortex_analyzers(config_path: str = CONFIG_PATH) -> None:
         for analyzer in remote_analyzers:
             Analyzer.objects.update_or_create(
                 name=analyzer.name,
-                defaults={"analyzer_cortex_id": analyzer.id, "is_active": True},
+                defaults={"analyzer_cortex_id": analyzer.id, "is_active": True, "source": "cortex"},
                 create_defaults={
                     "analyzer_cortex_id": analyzer.id,
                     "is_active": True,
+                    "source": "cortex",
                     "tier": tier_for(analyzer.name),
                 },
             )
             remote_names.append(analyzer.name)
         # The AI vote's row (ai_model connector) is no Cortex analyzer: leave it active.
         from cortex_job.cortex_utils.cortex_and_job_management import ai_analyzer_name
-        Analyzer.objects.exclude(name__in=[*remote_names, ai_analyzer_name()]).update(is_active=False)
+        Analyzer.objects.filter(source="cortex").exclude(name__in=[*remote_names, ai_analyzer_name()]).update(is_active=False)
 
     _warn_on_unresolved_configured_analyzers(remote_names)
 

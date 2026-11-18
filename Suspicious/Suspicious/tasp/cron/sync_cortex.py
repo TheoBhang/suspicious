@@ -2,7 +2,7 @@ import contextlib
 import logging
 import requests
 from django.db import transaction
-from cortex4py.exceptions import CortexException
+from cortex4py.exceptions import AuthenticationError, CortexException
 from cortex4py.models import Analyzer as CortexAnalyzer
 from cortex_job.cortex_utils.session_cortex_api import SessionCortexApi
 from .utils import load_config
@@ -66,6 +66,9 @@ def sync_cortex_analyzers(config_path: str = CONFIG_PATH, strict: bool = False) 
     except CortexException as exc:
         log_analyzers.error("Cortex fetch failed: %s", exc)
         if strict:
+            # A revoked or wrong API key (401/403) waits for an operator, not a retry.
+            if isinstance(exc, AuthenticationError):
+                exc.retryable = False
             raise
         return
     except requests.RequestException as exc:

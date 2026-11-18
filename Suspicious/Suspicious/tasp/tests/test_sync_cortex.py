@@ -174,3 +174,30 @@ class SyncCortexSourceTests(TestCase):
             self.assertIsNone(sync_cortex_analyzers())
             with self.assertRaises(requests.ConnectionError):
                 sync_cortex_analyzers(strict=True)
+
+
+class SyncCortexRunSyncNowTests(TestCase):
+    """The connector sync (strict mode) through the delivery ledger."""
+
+    def _run(self, exc):
+        from connectors.delivery import run_sync_now
+        from connectors.registry import registry
+        registry.discover()
+        with patch("tasp.cron.sync_cortex.load_config", return_value=_fake_cron_config()), patch(
+            "tasp.cron.sync_cortex._fetch_all_analyzers", side_effect=exc,
+        ):
+            run_sync_now("cortex")
+
+    def test_a_rejected_api_key_is_one_failed_row_and_no_retry(self):
+        from cortex4py.exceptions import AuthenticationError
+        from connectors.models import ConnectorDelivery
+        self._run(AuthenticationError("401"))
+        self.assertEqual(
+            list(ConnectorDelivery.objects.filter(connector="cortex").values_list("status", flat=True)),
+            ["failed"])
+
+    def test_a_server_error_is_still_retried(self):
+        from cortex4py.exceptions import CortexException
+        from connectors.delivery import RetryableDeliveryError
+        with self.assertRaises(RetryableDeliveryError):
+            self._run(CortexException("500"))

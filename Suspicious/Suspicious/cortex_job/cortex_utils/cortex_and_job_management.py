@@ -6,7 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from common.http_client import get_breaker, RETRY
-from cortex_job.cortex_utils.session_cortex_api import SessionCortexApi
+from cortex_job.cortex_utils.session_cortex_api import SessionCortexApi  # noqa: F401 -- patch point in tests
 from cortex_job.migrations._tier_seed import tier_for
 from cortex_job.models import Analyzer, AnalyzerReport, CaseAnalyzerJob
 from mail_feeder.models import MailBody, MailHeader
@@ -72,106 +72,12 @@ def _fetch_report(api, job_id: str):
 
 
 class CortexJob:
-    def __init__(self, api_url=None, api_key=None, proxies=None):
-        """
-        Initialize the CortexJob with API connection.
-
-        Args:
-            api_url (str, optional): Cortex API URL. Defaults to API_URL.
-            api_key (str, optional): Cortex API key. Defaults to API_KEY.
-            proxies (dict, optional): Proxy configuration, e.g., {"http": "...", "https": "..."}.
-        """
-        cortex_config = _get_cortex_config()
-        self.api_url = api_url or cortex_config.get("url", "https://cortex.example.com")
-        self.api_key = api_key or cortex_config.get("api_key", "your_api_key_here")
-
-        self.proxies = (
-            proxies if isinstance(proxies, dict) else {"http": "", "https": ""}
-        )
-
-        try:
-            self.api = SessionCortexApi(self.api_url, self.api_key, proxies=self.proxies)
-        except Exception as e:
-            fetch_mail_logger.error(f"Failed to initialize Cortex API: {e}")
-            self.api = None
-
     def launch_cortex_jobs(self, value, data_type, case):
-        """
-        Launch Cortex jobs for the given value and data type.
+        """Start the analyzers every enabled analysis engine selects for ``value``.
+        Forwards to connectors.engines.dispatch; returns the ledger job ids."""
+        from connectors import engines  # lazy: keeps the registry out of migration imports
 
-        Args:
-            value: The object to be analyzed (file, mail, domain, etc.).
-            data_type (str): The type of data ('file', 'url', 'mail_body', etc.).
-            case (Case): The case the dispatched jobs belong to.
-
-        Returns:
-            list[str]: A list of job IDs for the launched Cortex jobs.
-        """
-        cortex_config = _get_cortex_config()
-        api_launchjob = self.api
-        analyzers = []
-
-        try:
-            # --- FILE and MAIL_BODY special handling ---
-            if data_type in ["file", "mail_body"]:
-                if data_type == "mail_body":
-                    yara_name = (cortex_config.get("analyzers").get("yara"))
-                    yara_analyzer = api_launchjob.analyzers.get_by_name(yara_name)
-                    if yara_analyzer:
-                        analyzers.append(yara_analyzer)
-                    else:
-                        fetch_mail_logger.warning(
-                            f"Yara analyzer '{yara_name}' not found"
-                        )
-
-                elif data_type == "file":
-                    analyzers = CortexJob.get_file_analyzers(api_launchjob, value)
-
-                    if getattr(
-                        value, "file_path", None
-                    ) and value.file_path.name.endswith(".eml"):
-                        # .get(role) not .get(role, {}): an absent role must not put an
-                        # unhashable {} in this set (TypeError, swallowed below: no job at all).
-                        excluded = {
-                            cortex_config.get("analyzers", {}).get(role)
-                            for role in ("ai", "yara", "sandbox", "header")
-                        }
-                        analyzers = [
-                            a for a in analyzers if a and a.name not in excluded
-                        ]
-
-            # --- MAIL_HEADER handling ---
-            elif data_type == "mail_header":
-                header_name = (cortex_config.get("analyzers", {}).get("header", {}))
-                header_analyzer = api_launchjob.analyzers.get_by_name(header_name)
-                if header_analyzer:
-                    analyzers.append(header_analyzer)
-                else:
-                    fetch_mail_logger.warning(
-                        f"Header analyzer '{header_name}' not found"
-                    )
-
-            # --- GENERIC TYPES (ip, domain, hash, url, mail, etc.) ---
-            else:
-                analyzers = CortexJob.get_analyzers_by_type(api_launchjob, data_type)
-
-            # --- Run analyzers and collect job IDs ---
-            r_ids = []
-            for analyzer in analyzers:
-                try:
-                    report = CortexJob.run(api_launchjob, analyzer, value, data_type, case)
-                    if report and hasattr(report, "id"):
-                        r_ids.append(report.id)
-                except Exception as e:
-                    fetch_mail_logger.error(
-                        f"Error running analyzer {analyzer.name if analyzer else 'Unknown'}: {e}"
-                    )
-
-            return r_ids
-
-        except Exception as e:
-            fetch_mail_logger.error(f"Error launching Cortex jobs for {data_type}: {e}")
-            return []
+        return engines.dispatch(value, data_type, case)
 
     @staticmethod
     def run(api, analyzer, value, data_type, case):
@@ -400,12 +306,14 @@ class CortexJob:
         return data_value
 
     @staticmethod
-    def get_analyzer_db(analyzer):
+    def get_analyzer_db(analyzer, source="cortex"):
         """
         Retrieve an Analyzer object from the database, or create a new one if it does not exist.
 
         Args:
-            analyzer: An object with `id` and `name` attributes representing the Cortex analyzer.
+            analyzer: An object with `id` and `name` attributes (a Cortex analyzer or a
+                CatalogEntry whose id is already the ledger id).
+            source: The connector that owns a newly created row.
 
         Returns:
             Analyzer: The retrieved or newly created Analyzer instance, or None if
@@ -426,6 +334,7 @@ class CortexJob:
                     name=analyzer.name,
                     weight=0.2,
                     tier=tier_for(analyzer.name),
+                    source=source,
                 )
         except Exception as e:
             fetch_mail_logger.warning(

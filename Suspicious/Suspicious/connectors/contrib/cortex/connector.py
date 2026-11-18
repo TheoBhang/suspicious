@@ -6,14 +6,25 @@ directly whatever the flag says.
 """
 from __future__ import annotations
 
+import hmac
+import logging
+
 from connectors.base import (
+    FETCH_GONE,
+    FETCH_RESULT,
+    FETCH_UNKNOWN,
     PROVIDER_KIND_ANALYSIS,
+    CatalogEntry,
+    FetchResult,
+    StartResult,
     ConfigField,
     Connector,
     ConnectorManifest,
     HealthStatus,
     Schedule,
 )
+
+logger = logging.getLogger(__name__)
 
 _PLACEHOLDER_URL = "https://cortex.example.com"
 
@@ -109,3 +120,84 @@ class CortexConnector(Connector):
             return
         from tasp.cron.sync_cortex import sync_cortex_analyzers
         sync_cortex_analyzers(strict=True)
+
+    def _api(self):
+        from cortex_job.cortex_utils.session_cortex_api import SessionCortexApi
+        return SessionCortexApi(
+            self.config["url"].rstrip("/"), self.config["api_key"], proxies={"http": "", "https": ""}
+        )
+
+    def catalog(self, data_type: str | None = None, name: str | None = None) -> list[CatalogEntry]:
+        # ponytail: the unfiltered form (full catalogue) lands with the sync switch-over.
+        if not data_type and not name:
+            return []
+        try:
+            api = self._api()
+            found = api.analyzers.get_by_name(name) if name else api.analyzers.get_by_type(data_type)
+            found = [found] if name else found
+            return [
+                CatalogEntry(a.id, a.name, tuple(getattr(a, "dataTypeList", None) or ()))
+                for a in found or []
+            ]
+        except Exception as exc:  # noqa: BLE001: a failed lookup is an empty catalogue
+            logger.warning("cortex catalog lookup failed: %s", type(exc).__name__)
+            return []
+
+    def start(self, analyzer: CatalogEntry, data_type: str, value: str) -> StartResult | None:
+        if not value or not str(value).strip():
+            return None
+        payload = {
+            "data": value,
+            "dataType": "file" if data_type == "mail_body" else data_type,
+            "tlp": 2,
+        }
+        try:
+            report = self._api().analyzers.run_by_name(analyzer.name, payload)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Analyzer %r rejected %s input: %s", analyzer.name, data_type, type(exc).__name__)
+            return None
+        return StartResult(job_id=report.id) if report else None
+
+    def fetch(self, job_id: str) -> FetchResult:
+        import pybreaker
+        from cortex4py.exceptions import NotFoundError
+
+        from common.http_client import RETRY, get_breaker
+
+        breaker = get_breaker("cortex")
+
+        @RETRY
+        def _job(api):
+            with breaker.calling():
+                return api.jobs.get_by_id(job_id)
+
+        @RETRY
+        def _report(api):
+            with breaker.calling():
+                return api.jobs.get_report(job_id)
+
+        try:
+            api = self._api()
+            job = _job(api)
+            report = getattr(_report(api), "report", None) if job else None
+        except NotFoundError:
+            return FetchResult(FETCH_GONE)
+        except pybreaker.CircuitBreakerError:
+            logger.warning("[breaker:cortex] open, fetch skipped for job %s", job_id)
+            return FetchResult(FETCH_UNKNOWN)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Error fetching job %s: %s", job_id, type(exc).__name__)
+            return FetchResult(FETCH_UNKNOWN)
+        if not job or not report:
+            return FetchResult(FETCH_UNKNOWN)
+        return FetchResult(FETCH_RESULT, job.status, report["summary"], report["full"])
+
+    def webhook(self, headers: dict, payload: dict) -> list[str] | None:
+        from django.conf import settings
+
+        secret = self.config.get("webhook_secret") or getattr(settings, "CORTEX_WEBHOOK_SECRET", "")
+        auth = headers.get("Authorization", "")
+        if not secret or not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], secret):
+            return None
+        job_id = str(payload.get("jobId") or payload.get("job_id") or "").strip()
+        return [job_id] if job_id else []

@@ -312,7 +312,7 @@ def dispatch_case_analysis(self, case_id: int, intents: list, use_sender_domain:
     from django.apps import apps
     from django.utils import timezone
     from connectors.providers import queue_mail_ai
-    from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
+    from connectors import engines
     from url_process.url_utils.url_planner import filter_dispatch_intents
 
     case = Case.objects.filter(id=case_id).first()
@@ -343,10 +343,9 @@ def dispatch_case_analysis(self, case_id: int, intents: list, use_sender_domain:
         from mail_feeder.job_handler.artifacts.artifacts import _sender_domain_for_case
         sender_domain = _sender_domain_for_case(case)
     filtered = filter_dispatch_intents(resolved, sender_domain=sender_domain)
-    cortex = CortexJob()
     for value, data_type in filtered:
         try:
-            cortex.launch_cortex_jobs(value=value, data_type=data_type, case=case)
+            engines.dispatch(value=value, data_type=data_type, case=case)
         except Exception:
             logger.exception(
                 "Failed to launch Cortex jobs (case=%s data_type=%s)", case_id, data_type

@@ -122,10 +122,13 @@ class CortexConnector(Connector):
         sync_cortex_analyzers(strict=True)
 
     def _api(self):
-        from cortex_job.cortex_utils.session_cortex_api import SessionCortexApi
-        return SessionCortexApi(
-            self.config["url"].rstrip("/"), self.config["api_key"], proxies={"http": "", "https": ""}
-        )
+        """One client per connector instance (an engine instance lives for one dispatch)."""
+        if getattr(self, "_client", None) is None:
+            from cortex_job.cortex_utils.session_cortex_api import SessionCortexApi
+            self._client = SessionCortexApi(
+                self.config["url"].rstrip("/"), self.config["api_key"], proxies={"http": "", "https": ""}
+            )
+        return self._client
 
     def catalog(self, data_type: str | None = None, name: str | None = None) -> list[CatalogEntry]:
         # ponytail: the unfiltered form (full catalogue) lands with the sync switch-over.
@@ -151,9 +154,13 @@ class CortexConnector(Connector):
             "dataType": "file" if data_type == "mail_body" else data_type,
             "tlp": 2,
         }
+        from cortex4py.exceptions import InvalidInputError
+
+        # Only a refusal is None: cortex4py maps a 4xx other than 401/403/404 to
+        # InvalidInputError. An outage (auth, connection, timeout, 5xx) propagates.
         try:
             report = self._api().analyzers.run_by_name(analyzer.name, payload)
-        except Exception as exc:  # noqa: BLE001
+        except InvalidInputError as exc:
             logger.warning("Analyzer %r rejected %s input: %s", analyzer.name, data_type, type(exc).__name__)
             return None
         return StartResult(job_id=report.id) if report else None

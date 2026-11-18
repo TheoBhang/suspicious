@@ -69,36 +69,54 @@ def ledger_ids(connector: str, ext_job_id: str, ext_analyzer_id: str) -> tuple[s
 
 def dispatch(value, data_type: str, case) -> list[str]:
     """Start the selected analyzers of every enabled engine on ``value``; returns the
-    ledger job ids. One engine or analyzer failing never stops the others."""
+    ledger job ids. One engine or analyzer failing never stops the others, and dispatch
+    never raises (callers rely on it, as on launch_cortex_jobs) except TypeError for no case."""
     if case is None:
         raise TypeError("dispatch requires a non-None case")
+    job_ids: list[str] = []
+    try:
+        _dispatch(value, data_type, case, job_ids)
+    except Exception:  # noqa: BLE001
+        logger.exception("Dispatch of %s failed (case=%s)", data_type, case.id)
+    return job_ids
+
+
+def _roles() -> dict:
+    """integrations.cortex.analyzers; empty (logged) when the config cannot be read."""
+    from settings.config import get_section
+
+    try:
+        return get_section("integrations.cortex").get("analyzers") or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Could not load cortex analyzer roles: %s", exc)
+        return {}
+
+
+def _dispatch(value, data_type, case, job_ids) -> None:
     names = enabled_engines()
     if not names:
-        return []
+        return
 
     from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
-    from settings.config import get_section
 
     try:
         data_value = CortexJob.get_data_value(value, data_type)
     except Exception as exc:  # noqa: BLE001
         logger.error("Error extracting data value for %s: %s", data_type, exc)
-        return []
+        return
     if not data_value or (isinstance(data_value, str) and not data_value.strip()):
         logger.debug("Skip %s dispatch: empty data value", data_type)
-        return []
+        return
 
-    roles = get_section("integrations.cortex").get("analyzers") or {}
-    job_ids = []
+    roles = _roles()
     for name in names:
         try:
-            job_ids += _dispatch_engine(name, value, data_type, data_value, case, roles)
+            _dispatch_engine(name, value, data_type, data_value, case, roles, job_ids)
         except Exception as exc:  # noqa: BLE001: one engine must not stop the others
             logger.error("Engine %s failed to dispatch %s: %s", name, data_type, type(exc).__name__)
-    return job_ids
 
 
-def _dispatch_engine(name, value, data_type, data_value, case, roles) -> list[str]:
+def _dispatch_engine(name, value, data_type, data_value, case, roles, job_ids) -> None:
     from cortex_job.models import Analyzer
 
     connector = registry.instantiate(name)
@@ -111,7 +129,6 @@ def _dispatch_engine(name, value, data_type, data_value, case, roles) -> list[st
     else:
         offered = connector.catalog(data_type=data_type)
 
-    job_ids = []
     for entry in select_analyzers(data_type, value, offered, roles):
         if Analyzer.objects.filter(name=entry.name).exclude(source=name).exists():
             logger.error("Engine %s offers analyzer %r, owned by another source: skipped", name, entry.name)
@@ -123,29 +140,46 @@ def _dispatch_engine(name, value, data_type, data_value, case, roles) -> list[st
             continue
         if job_id:
             job_ids.append(job_id)
-    return job_ids
+
+
+def _failed_start(name, case, analyzer_name, reason) -> None:
+    from connectors.models import ConnectorDelivery
+
+    ConnectorDelivery.objects.create(
+        connector=name, event="start", case_id=case.id,
+        status=ConnectorDelivery.STATUS_FAILED, error=f"{analyzer_name}: {reason}",
+    )
 
 
 def _start(connector, name, entry, value, data_type, data_value, case) -> str | None:
-    from connectors.models import ConnectorDelivery
     from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
     from cortex_job.models import AnalyzerReport, CaseAnalyzerJob
 
+    try:  # the analyzer id is known now: refuse it before an external job exists
+        analyzer_id = ledger_ids(name, "", str(entry.id))[1]
+    except ValueError:
+        logger.error("Engine %s analyzer %r: id too long, not started", name, entry.name)
+        _failed_start(name, case, entry.name, "id too long")
+        return None
+
     try:
         started = connector.start(entry, data_type, data_value)
-        reason = "" if started else "refused"
     except Exception as exc:  # noqa: BLE001: the class name only, never a URL or secret
-        started, reason = None, type(exc).__name__
-    if reason:
-        logger.warning("Engine %s did not start %s on %s: %s", name, entry.name, data_type, reason)
-        ConnectorDelivery.objects.create(
-            connector=name, event="start", case_id=case.id,
-            status=ConnectorDelivery.STATUS_FAILED, error=f"{entry.name}: {reason}",
-        )
+        logger.warning("Engine %s failed to start %s on %s: %s", name, entry.name, data_type, type(exc).__name__)
+        _failed_start(name, case, entry.name, type(exc).__name__)
+        return None
+    if not started:  # a refusal is routine (the engine logs it): no ledger row
+        logger.debug("Engine %s refused %s on %s", name, entry.name, data_type)
         return None
 
     # Task 4 adds the finished-result path; until then started.finished is ignored (row pending).
-    job_id, analyzer_id = ledger_ids(name, str(started.job_id), str(entry.id))
+    try:
+        job_id = ledger_ids(name, str(started.job_id), "")[0]
+    except ValueError:
+        logger.error("Engine %s job id for %r too long: started job not recorded", name, entry.name)
+        _failed_start(name, case, entry.name, "job id too long")
+        return None
+
     with transaction.atomic():
         analyzer_db = CortexJob.get_analyzer_db(dataclasses.replace(entry, id=analyzer_id), source=name)
         analyzer_report = AnalyzerReport(

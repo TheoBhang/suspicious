@@ -2,7 +2,13 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pybreaker
-from cortex4py.exceptions import NotFoundError
+from cortex4py.exceptions import (
+    AuthenticationError,
+    InvalidInputError,
+    NotFoundError,
+    ServerError,
+    ServiceUnavailableError,
+)
 from django.test import SimpleTestCase, override_settings
 
 from connectors.base import CatalogEntry, FetchResult, StartResult
@@ -69,11 +75,35 @@ class StartTest(SimpleTestCase):
 
     def test_rejection_and_empty_are_none(self):
         with mock.patch(API) as api:
-            api.return_value.analyzers.run_by_name.side_effect = RuntimeError("bad input")
-            self.assertIsNone(conn().start(ENTRY, "file", "v"))
+            api.return_value.analyzers.run_by_name.side_effect = InvalidInputError("bad input")
+            with self.assertLogs("connectors.contrib.cortex.connector", "WARNING"):
+                self.assertIsNone(conn().start(ENTRY, "file", "v"))
             api.return_value.analyzers.run_by_name.side_effect = None
             api.return_value.analyzers.run_by_name.return_value = None
             self.assertIsNone(conn().start(ENTRY, "file", "v"))
+
+    def test_an_outage_propagates(self):
+        import requests
+        for exc in (ServiceUnavailableError("down"), AuthenticationError("401"),
+                    ServerError("timeout"), requests.ConnectionError("x"),
+                    requests.HTTPError("503")):
+            with mock.patch(API) as api, self.subTest(exc=type(exc).__name__):
+                api.return_value.analyzers.run_by_name.side_effect = exc
+                with self.assertRaises(type(exc)):
+                    conn().start(ENTRY, "file", "v")
+
+
+class ClientReuseTest(SimpleTestCase):
+    def test_one_client_per_instance(self):
+        with mock.patch(API) as api:
+            api.return_value.analyzers.get_by_type.return_value = []
+            api.return_value.analyzers.run_by_name.return_value = SimpleNamespace(id="j1")
+            api.return_value.jobs.get_by_id.side_effect = NotFoundError("gone")
+            c = conn()
+            c.catalog(data_type="file")
+            c.start(ENTRY, "file", "/tmp/x")
+            c.fetch("j1")
+        api.assert_called_once()
 
 
 class FetchTest(SimpleTestCase):

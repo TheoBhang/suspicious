@@ -186,7 +186,9 @@ class DispatchTest(TestCase):
              {"ongoing": "analysis"}, self.url.id, "url"),
         )
         caj = CaseAnalyzerJob.objects.get(case=self.case2)
+        old_caj = CaseAnalyzerJob.objects.get(case=self.case)
         self.assertEqual((caj.cortex_job_id, caj.status), ("j2", CaseAnalyzerJob.STATUS_INPROGRESS))
+        self.assertEqual((caj.analyzer_id, caj.status), (old_caj.analyzer_id, old_caj.status))
         self.assertEqual(caj.analyzer_report.cortex_job_id, "j2")
         self.assertEqual(Analyzer.objects.get().analyzer_cortex_id, "vt1")
 
@@ -203,6 +205,43 @@ class DispatchTest(TestCase):
         caj = CaseAnalyzerJob.objects.get()
         self.assertEqual((caj.cortex_job_id, caj.analyzer_report_id, caj.status),
                          ("fake_a-job-VT", ar.id, CaseAnalyzerJob.STATUS_INPROGRESS))
+
+    def test_dispatch_creates_the_analyzer_row_with_weight_and_tier(self):
+        from cortex_job.migrations._tier_seed import tier_for
+        self.only("fake_a")
+        self.fake_a.offered = [e("VirusTotal_GetReport_3_1")]
+        engines.dispatch(self.url, "url", self.case)
+        row = Analyzer.objects.get()
+        self.assertEqual((row.weight, row.tier), (0.2, tier_for("VirusTotal_GetReport_3_1")))
+        self.assertEqual(CaseAnalyzerJob.objects.get().analyzer, row)
+
+    def test_too_long_id_is_not_started(self):
+        self.only("fake_a")
+        self.fake_a.offered = [CatalogEntry("x" * 50, "Long", ("url",)), e("Ok")]
+        with self.assertLogs("connectors.engines", "ERROR"):
+            self.assertEqual(engines.dispatch(self.url, "url", self.case), ["fake_a-job-Ok"])
+        self.assertEqual([n for n, *_ in self.fake_a.started], ["Ok"])
+        self.assertEqual(
+            list(ConnectorDelivery.objects.filter(status="failed").values_list("error", flat=True)),
+            ["Long: id too long"])
+
+    def test_unreadable_roles_are_empty(self):
+        self.only("fake_a")
+        self.fake_a.offered = [e("Yara"), e("VT")]
+        def get_section(name):
+            if name == "integrations.cortex":
+                raise RuntimeError("db down")
+            return {}
+
+        with mock.patch("settings.config.get_section", side_effect=get_section), \
+                self.assertLogs("connectors.engines", "ERROR"):
+            ids = engines.dispatch(self.url, "url", self.case)
+        self.assertEqual(sorted(ids), ["fake_a-job-VT", "fake_a-job-Yara"])
+
+    def test_dispatch_never_raises(self):
+        with mock.patch("connectors.engines.enabled_engines", side_effect=RuntimeError("db")), \
+                self.assertLogs("connectors.engines", "ERROR"):
+            self.assertEqual(engines.dispatch(self.url, "url", self.case), [])
 
     def test_finished_start_is_written_as_pending(self):
         self.only("fake_a")
@@ -227,8 +266,8 @@ class DispatchTest(TestCase):
         self.assertEqual(engines.dispatch(self.url, "url", self.case), ["fake_a-job-Ok"])
         self.assertEqual(list(AnalyzerReport.objects.values_list("analyzer__name", flat=True)), ["Ok"])
         failed = ConnectorDelivery.objects.filter(connector="fake_a", event="start", status="failed")
-        self.assertEqual(sorted(failed.values_list("error", flat=True)),
-                         ["Boom: ConnectionError", "Refused: refused"])
+        # A refusal is routine: no ledger row. Only the raising start is a failed delivery.
+        self.assertEqual(list(failed.values_list("error", flat=True)), ["Boom: ConnectionError"])
         self.assertEqual(set(failed.values_list("case_id", flat=True)), {self.case.id})
 
     def test_disabled_engine_starts_nothing(self):

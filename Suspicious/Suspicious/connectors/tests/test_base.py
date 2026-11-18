@@ -145,6 +145,8 @@ class EngineContractTest(SimpleTestCase):
         self.assertEqual(e, CatalogEntry("a", "A", ("mail",)))
         r = FetchResult("result", "Success", {"a": 1}, {"b": 2})
         self.assertEqual((r.summary, r.full, r.status), ({"a": 1}, {"b": 2}, "Success"))
+        self.assertEqual(r.data_type, "")
+        self.assertEqual(FetchResult("result", "Success", None, None, data_type="file").data_type, "file")
         s = StartResult("j")
         self.assertIsNone(s.finished)
         for obj in (e, r, s):

@@ -15,13 +15,13 @@ from connectors.base import (
     FETCH_UNKNOWN,
     PROVIDER_KIND_ANALYSIS,
     CatalogEntry,
-    FetchResult,
-    StartResult,
     ConfigField,
     Connector,
     ConnectorManifest,
+    FetchResult,
     HealthStatus,
     Schedule,
+    StartResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,7 +179,6 @@ class CortexConnector(Connector):
         try:
             api = self._api()
             job = _job(api)
-            report = getattr(_report(api), "report", None) if job else None
         except NotFoundError:
             return FetchResult(FETCH_GONE)
         except pybreaker.CircuitBreakerError:
@@ -188,9 +187,18 @@ class CortexConnector(Connector):
         except Exception as exc:  # noqa: BLE001
             logger.error("Error fetching job %s: %s", job_id, type(exc).__name__)
             return FetchResult(FETCH_UNKNOWN)
-        if not job or not report:
+        if not job:
             return FetchResult(FETCH_UNKNOWN)
-        return FetchResult(FETCH_RESULT, job.status, report["summary"], report["full"])
+        # Only a missing job is "gone"; any report failure just leaves the report absent.
+        try:
+            report = getattr(_report(api), "report", None) or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("No report for job %s: %s", job_id, type(exc).__name__)
+            report = {}
+        return FetchResult(
+            FETCH_RESULT, job.status, report.get("summary"), report.get("full"),
+            data_type=getattr(job, "dataType", "") or "",
+        )
 
     def webhook(self, headers: dict, payload: dict) -> list[str] | None:
         from django.conf import settings

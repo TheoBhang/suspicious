@@ -199,6 +199,7 @@ class FetchResult:
     status: str = ""
     summary: dict | None = None
     full: dict | None = None
+    data_type: str = ""  # the engine's own dataType for the job, as reported
 
 
 @dataclass(frozen=True)

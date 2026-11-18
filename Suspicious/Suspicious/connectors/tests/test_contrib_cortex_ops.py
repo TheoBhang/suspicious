@@ -84,7 +84,39 @@ class FetchTest(SimpleTestCase):
             api.return_value.jobs.get_by_id.return_value = job
             api.return_value.jobs.get_report.return_value = report
             out = conn().fetch("j1")
-        self.assertEqual(out, FetchResult("result", "Success", {"dataType": "file"}, {"a": 1}))
+        self.assertEqual(out, FetchResult("result", "Success", {"dataType": "file"}, {"a": 1}, "file"))
+
+    def _fetch(self, job, report=None, report_exc=None):
+        with mock.patch(API) as api:
+            api.return_value.jobs.get_by_id.return_value = job
+            if report_exc:
+                api.return_value.jobs.get_report.side_effect = report_exc
+            else:
+                api.return_value.jobs.get_report.return_value = report
+            return conn().fetch("j1")
+
+    def test_data_type_carried_not_in_summary(self):
+        job = SimpleNamespace(status="Success", dataType="file")
+        out = self._fetch(job, SimpleNamespace(report={"summary": {"x": 1}, "full": {}}))
+        self.assertEqual(out.data_type, "file")
+        self.assertEqual(out.summary, {"x": 1})
+
+    def test_report_not_found_is_not_gone(self):
+        job = SimpleNamespace(status="Success", dataType="file")
+        out = self._fetch(job, report_exc=NotFoundError("x"))
+        self.assertEqual(out, FetchResult("result", "Success", None, None, "file"))
+
+    def test_job_without_report_keeps_status(self):
+        job = SimpleNamespace(status="InProgress", dataType="url")
+        out = self._fetch(job, SimpleNamespace(report=None))
+        self.assertEqual(out, FetchResult("result", "InProgress", None, None, "url"))
+
+    def test_report_missing_keys_does_not_raise(self):
+        job = SimpleNamespace(status="Success", dataType="file")
+        out = self._fetch(job, SimpleNamespace(report={"full": {"a": 1}}))
+        self.assertEqual((out.summary, out.full), (None, {"a": 1}))
+        out = self._fetch(job, SimpleNamespace(report={"summary": {"a": 1}}))
+        self.assertEqual((out.summary, out.full), ({"a": 1}, None))
 
     def test_gone(self):
         with mock.patch(API) as api:

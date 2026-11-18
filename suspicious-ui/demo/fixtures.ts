@@ -242,6 +242,7 @@ const detailFor = (r: Row) => {
   const reports = ioc ? IOC_REPORTS : MAIL_REPORTS;
   return {
     ...r,
+    ai_assessment: ioc ? null : AI_ASSESSMENT,
     analyzer_reports: reports,
     case_infos: {
       id: r.id,
@@ -289,6 +290,102 @@ const ANALYZERS = [
   analyzer_cortex_id: `${name}_1_0`,
   is_active: true,
 }));
+
+// ─── AI model ───────────────────────────────────────────────────────────────
+
+const inDays = (days: number) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString();
+};
+
+/** What the case drawer's "AI model assessment" section shows for a mail. */
+const AI_ASSESSMENT = {
+  result: "Dangerous",
+  sub_class: "credential_phishing",
+  tier: "high",
+  runner_up: null,
+  model_version: "v3",
+  analysed_at: iso(0, 8, 43),
+  reads: "subject, body and headers",
+  similar_cases: [
+    { case_id: 36, similarity: 0.93, label: "Dangerous", provenance: "Analyst" },
+    { case_id: 29, similarity: 0.9, label: "Dangerous", provenance: "Analyst" },
+    { case_id: 17, similarity: 0.86, label: "Unwanted", provenance: "Reporter" },
+  ],
+  campaign: { ref: "CMP-0142", size: 19, labels: { Dangerous: 17, Unwanted: 2 }, members_disagree: false },
+  cross_check: {
+    disagrees: false,
+    facts: [
+      { kind: "rule", text: "Two independent tier-1 sources agree on malicious." },
+      { kind: "source", text: "URL reputation: newly registered look-alike domain." },
+    ],
+  },
+};
+
+const MODEL_VERSIONS = [
+  { version_id: "v3", status: "active", trigger: "scheduled", created_at: iso(21), shadow_since: iso(35), shadow_min_days: 7,
+    recheck: { passed: true, finished_at: iso(22) },
+    stats: { scored: 1840, dangerous: 412, checks: 96, created: 6, joined: 41, alerts: 9 },
+    purity: { labelled: 120, dangerous: 112, purity: 0.933, warning: false }, age_warning: false },
+  { version_id: "v2", status: "previous", trigger: "scheduled", created_at: iso(52), shadow_since: iso(66), shadow_min_days: 7,
+    recheck: { passed: true, finished_at: iso(53) },
+    stats: { scored: 2210, dangerous: 498, checks: 120, created: 8, joined: 55, alerts: 14 },
+    purity: { labelled: 150, dangerous: 139, purity: 0.927, warning: false }, age_warning: false },
+  { version_id: "v1", status: "discarded", trigger: "manual", created_at: iso(88), shadow_since: null, shadow_min_days: 7,
+    recheck: null,
+    stats: { scored: 0, dangerous: 0, checks: 0, created: 0, joined: 0, alerts: 0 },
+    purity: { labelled: 0, dangerous: 0, purity: null, warning: false }, age_warning: true },
+];
+
+const LEDGER_BY_SOURCE = {
+  analyst: { Dangerous: 812, Unwanted: 240, Safe: 1904 },
+  reporter: { Dangerous: 96, Unwanted: 58, Safe: 402 },
+  campaign: { Dangerous: 330, Unwanted: 12, Safe: 0 },
+};
+
+const AI_STATUS = {
+  active: MODEL_VERSIONS[0],
+  previous: MODEL_VERSIONS[1],
+  shadow: null,
+  job_running: false,
+  job_id: null,
+  health: { ok: true, detail: null, checked_at: iso(0, 8, 50) },
+  breaker: { state: "closed", since: null },
+  schedule: { enabled: true, interval_days: 14, next_run: inDays(6), backoff_until: null },
+  counts: { candidate: 0, shadow: 0, active: 1, previous: 1, discarded: 1, failed: 0 },
+  jobs: [
+    { job_id: "job-41", kind: "retrain", state: "succeeded", trigger: "scheduled", rows: 5120, excluded_rows: 37,
+      started_at: iso(22, 2, 0), finished_at: iso(22, 2, 41), error: "" },
+  ],
+  ledger: { by_source: LEDGER_BY_SOURCE, flagged: 12, trainable: 5120 },
+};
+
+const connector = (name: string, description: string, category: string, enabled: boolean, events: string[]) => ({
+  name,
+  version: "1.0.0",
+  description,
+  author: "Thales Group CERT",
+  docs_url: "https://thalesgroup-cert.github.io/suspicious/components/backend/connectors/",
+  category,
+  events,
+  schedules: [],
+  config_schema: [],
+  enabled,
+  enabled_by_default: false,
+  status: enabled ? "connected" : "disabled",
+  last_health_ok: enabled ? true : null,
+  last_health_detail: "",
+  last_health_at: enabled ? iso(0, 8, 50) : null,
+});
+
+const CONNECTORS = [
+  connector("ai_model", "AI mail classifier and campaign detection.", "analysis", true, ["case_finalised"]),
+  connector("thehive", "Push alerts and campaigns to TheHive.", "ticketing", true, ["campaign_updated"]),
+  connector("misp", "Share indicators of dangerous cases with MISP.", "threat-intel", true, ["case_finalised"]),
+  connector("smtp_notify", "Email reporters the outcome of their submission.", "notification", true, ["case_finalised"]),
+  connector("watcher", "Sync monitored and legit domains from Watcher.", "threat-intel", false, []),
+];
 
 // ─── Dashboard ──────────────────────────────────────────────────────────────
 
@@ -517,6 +614,10 @@ export async function installMocks(page: Page, state: DemoState) {
       }
       return json(route, page_(items));
     }
+    if (path === "/connectors/enabled/") {
+      return json(route, { enabled: CONNECTORS.filter((c) => c.enabled).map((c) => c.name) });
+    }
+    if (path === "/connectors/") return json(route, { connectors: CONNECTORS, load_errors: {} });
     if (path === "/settings/email-feeder/") return json(route, { enabled: true });
     if (path === "/settings/analyzers/") return json(route, page_(ANALYZERS));
     if (/^\/settings\/analyzers\/\d+\/$/.test(path)) return json(route, {});
@@ -581,6 +682,36 @@ export async function installMocks(page: Page, state: DemoState) {
     if (path === "/submissions/") {
       const rows = state.submitted ? [NEW_ROW, ...ROWS] : ROWS;
       return json(route, page_(filtered(rows, url)));
+    }
+
+    // ── AI model admin panel (Settings > AI model)
+    if (path.startsWith("/ai-model/")) {
+      const sub = path.replace("/ai-model/", "");
+      if (sub === "status/") return json(route, AI_STATUS);
+      if (sub === "versions/") return json(route, page_(MODEL_VERSIONS));
+      if (sub === "candidates/") return json(route, page_([]));
+      if (sub === "shadow/") return json(route, { shadow: null });
+      if (sub === "reviews/" || sub === "jobs/" || sub === "flags/") return json(route, page_([]));
+      if (sub === "ledger/") {
+        return json(route, {
+          by_source: LEDGER_BY_SOURCE, flagged: 12, trainable: 5120,
+          mix: {
+            now: { Dangerous: 0.28, Unwanted: 0.09, Safe: 0.63 }, before: { Dangerous: 0.27, Unwanted: 0.1, Safe: 0.63 },
+            rows: { now: 5120, before: 4890 }, jump: null,
+          },
+        });
+      }
+      if (sub === "queue/") {
+        return json(route, { disagreements: { count: 0, results: [] }, campaign_conflicts: { count: 0, results: [] } });
+      }
+      return json(route, {});
+    }
+
+    // ── bulk actions on the Investigation list
+    if (path.startsWith("/investigations/bulk/") && method === "POST") {
+      const { case_ids = [] } = JSON.parse(req.postData() ?? "{}") as { case_ids?: number[] };
+      const outcome = path.includes("verdict") ? "updated" : "queued";
+      return json(route, { results: case_ids.map((case_id) => ({ case_id, outcome })) });
     }
 
     // ── investigations (CERT view)

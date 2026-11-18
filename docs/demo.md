@@ -12,7 +12,7 @@ burned into the video, so it plays silently anywhere.
   <a href="../assets/demo/suspicious-demo.mp4">Download the MP4</a>.
 </video>
 
-About 100 seconds, 1280×720, no audio. Subtitle files for reuse or translation:
+About two minutes, 1280×720, no audio. Subtitle files for reuse or translation:
 [WebVTT](assets/demo/suspicious-demo.vtt) · [SRT](assets/demo/suspicious-demo.srt).
 
 ## What it shows
@@ -23,10 +23,13 @@ About 100 seconds, 1280×720, no audio. Subtitle files for reuse or translation:
    Related indicators become one case.
 4. **My submissions**: the case opens as soon as it is created, with per-analyzer
    verdicts, confidence and evidence.
-5. **Investigation**: the CERT workspace, with an explained verdict and the
-   per-source breakdown behind it.
+5. **Investigation**: the CERT workspace, with an explained verdict, the
+   per-source breakdown behind it, the AI model's assessment (confidence,
+   similar past cases, campaign) and bulk actions on several cases at once.
 6. **Dashboard**: volumes, outcomes and top reporters, month over month.
 7. **Campaigns**: ML-embedding clusters that surface coordinated waves.
+8. **Settings, AI model**: where admins retrain, shadow-test, promote or roll
+   back the mail classifier.
 
 All data is fictional ("Meridian Group": `.example` domains and TEST-NET
 addresses). Nothing here comes from a real deployment.

@@ -94,10 +94,24 @@ test("Suspicious product walkthrough", async ({ page }) => {
   await d.click(page.getByRole("button", { name: /show source breakdown/i }));
   await snap("05c-investigation-sources");
   await d.pause(1800);
-  await d.scroll(260);
-  await d.pause(1200);
+  await d.say("The AI model adds its own read: confidence, similar past cases and the campaign.", 0);
+  await d.glide(page.getByRole("heading", { name: /ai model assessment/i }));
+  await d.scroll(160);
+  await snap("05d-investigation-ai");
+  await d.pause(3600);
   await d.click(page.getByRole("button", { name: /^close$/i }));
   await d.pause(300);
+  await d.say("Select several cases to re-run their analysis or set a verdict in one go.", 0);
+  await d.click(page.getByRole("checkbox", { name: "Select case 41" }));
+  await d.click(page.getByRole("checkbox", { name: "Select case 40" }));
+  await expect(page.getByText("2 selected")).toBeVisible();
+  await snap("05e-investigation-bulk");
+  await d.pause(1200);
+  await d.click(page.getByRole("button", { name: /^redo analysis$/i }));
+  await expect(page.getByText(/2 queued for analysis/i)).toBeVisible();
+  await d.pause(2200);
+  await d.click(page.getByRole("button", { name: /^(clear|dismiss)$/i }));
+  await d.pause(500);
 
   // ── 6. Dashboard ─────────────────────────────────────────────────────────
   await d.click(nav("Dashboard"));
@@ -123,7 +137,20 @@ test("Suspicious product walkthrough", async ({ page }) => {
   await d.scroll(520);
   await d.pause(1600);
 
-  // ── 8. Outro ─────────────────────────────────────────────────────────────
+  // ── 8. Settings: AI model ────────────────────────────────────────────────
+  await d.click(nav("Settings"));
+  await expect(heading("Settings")).toBeVisible();
+  await d.say("Admins manage the AI classifier from Settings: retrain, shadow-test, promote or roll back.", 0);
+  await d.click(page.getByRole("link", { name: /^ai model/i }));
+  await expect(page.getByText(/active version: v3/i)).toBeVisible();
+  await snap("08-ai-model");
+  await d.pause(3800);
+  await d.click(page.getByRole("tab", { name: "Versions" }));
+  await expect(page.getByRole("table", { name: "Version history" })).toBeVisible();
+  await snap("08b-ai-model-versions");
+  await d.pause(3200);
+
+  // ── 9. Outro ─────────────────────────────────────────────────────────────
   await d.click(nav("Home"));
   await d.say("Open source, self-hosted, and deployed with Docker Compose.", 3000);
   await d.say("github.com/thalesgroup-cert/suspicious", 3600, 600);

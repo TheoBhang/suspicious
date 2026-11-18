@@ -190,9 +190,9 @@ clip("settings", {}, async ({ page, d, shot }) => {
   await d.click(page.getByRole("button", { name: /^add$/i }));
   await d.pause(2000);
   await shot("added");
-  await d.click(page.getByRole("button", { name: /domains denylist/i }));
+  await d.click(page.getByRole("link", { name: /domains denylist/i }));
   await d.pause(2000);
-  await d.click(page.getByRole("button", { name: /scoring/i }));
+  await d.click(page.getByRole("link", { name: /analyzer scoring/i }));
   await d.pause(2400);
   await shot("scoring");
 });

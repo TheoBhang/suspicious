@@ -1,67 +1,79 @@
 1
-00:00:01,083 --> 00:00:04,493
+00:00:00,948 --> 00:00:04,358
 Suspicious: AI-powered phishing and threat analysis, built by Thales Group CERT.
 
 2
-00:00:04,493 --> 00:00:08,189
+00:00:04,358 --> 00:00:08,054
 Employees sign in with SSO, or with a local account.
 
 3
-00:00:18,854 --> 00:00:22,526
+00:00:19,232 --> 00:00:22,976
 Home shows this month's verdicts across the whole organisation…
 
 4
-00:00:22,526 --> 00:00:26,654
+00:00:22,976 --> 00:00:27,104
 …and your latest submissions, one click from the full report.
 
 5
-00:00:26,873 --> 00:00:30,762
+00:00:27,348 --> 00:00:31,280
 Anyone can report something suspicious in seconds: a file, an email, or pasted indicators.
 
 6
-00:00:30,762 --> 00:00:34,746
+00:00:31,280 --> 00:00:35,264
 Types are detected automatically, defanged links included.
 
 7
-00:00:39,129 --> 00:00:42,878
+00:00:39,347 --> 00:00:43,017
 Related indicators are correlated into a single case.
 
 8
-00:00:42,878 --> 00:00:47,962
+00:00:43,017 --> 00:00:48,200
 The new case opens at once. Analyzers run in parallel: YARA, ML, sandbox and reputation.
 
 9
-00:00:47,962 --> 00:00:52,247
+00:00:48,200 --> 00:00:52,529
 Each analyzer reports its own verdict, confidence and evidence.
 
 10
-00:00:52,247 --> 00:00:56,847
+00:00:52,529 --> 00:00:57,129
 Reporters follow every submission, and its final verdict, in one place.
 
 11
-00:00:57,428 --> 00:01:01,028
+00:00:57,679 --> 00:01:01,279
 CERT analysts get a full investigation workspace…
 
 12
-00:01:01,296 --> 00:01:06,096
+00:01:01,709 --> 00:01:06,509
 …with an explained verdict: which sources agreed, and why.
 
 13
-00:01:12,591 --> 00:01:16,197
-The dashboard tracks volumes, outcomes and top reporters, month over month.
+00:01:08,363 --> 00:01:13,403
+The AI model adds its own read: confidence, similar past cases and the campaign.
 
 14
-00:01:20,675 --> 00:01:24,094
-Campaign detection clusters similar messages with ML embeddings…
+00:01:14,423 --> 00:01:19,127
+Select several cases to re-run their analysis or set a verdict in one go.
 
 15
-00:01:24,094 --> 00:01:27,790
-…so a coordinated wave is spotted before it spreads.
+00:01:24,286 --> 00:01:27,891
+The dashboard tracks volumes, outcomes and top reporters, month over month.
 
 16
-00:01:30,871 --> 00:01:33,885
-Open source, self-hosted, and deployed with Docker Compose.
+00:01:32,323 --> 00:01:35,863
+Campaign detection clusters similar messages with ML embeddings…
 
 17
-00:01:33,885 --> 00:01:37,901
+00:01:35,863 --> 00:01:39,559
+…so a coordinated wave is spotted before it spreads.
+
+18
+00:01:42,570 --> 00:01:48,090
+Admins manage the AI classifier from Settings: retrain, shadow-test, promote or roll back.
+
+19
+00:01:53,561 --> 00:01:56,572
+Open source, self-hosted, and deployed with Docker Compose.
+
+20
+00:01:56,572 --> 00:02:00,580
 github.com/thalesgroup-cert/suspicious

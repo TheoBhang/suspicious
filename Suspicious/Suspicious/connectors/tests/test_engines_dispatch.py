@@ -243,15 +243,6 @@ class DispatchTest(TestCase):
                 self.assertLogs("connectors.engines", "ERROR"):
             self.assertEqual(engines.dispatch(self.url, "url", self.case), [])
 
-    def test_finished_start_is_written_as_pending(self):
-        self.only("fake_a")
-        self.fake_a.offered = [e("VT")]
-        from connectors.base import FetchResult
-        with mock.patch.object(self.fake_a, "start",
-                               return_value=StartResult("j9", finished=FetchResult("result", "Success"))):
-            engines.dispatch(self.url, "url", self.case)
-        self.assertEqual(CaseAnalyzerJob.objects.get().status, CaseAnalyzerJob.STATUS_INPROGRESS)
-
     def test_two_engines_one_raising(self):
         self.fake_a.offered, self.fake_b.offered = [e("VT_A")], [e("VT_B")]
         self.assertEqual(len(engines.dispatch(self.url, "url", self.case)), 2)

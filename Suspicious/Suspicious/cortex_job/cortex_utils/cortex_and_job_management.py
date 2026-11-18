@@ -3,7 +3,6 @@ import logging
 import pybreaker
 from cortex4py.exceptions import NotFoundError
 from django.db import transaction
-from django.utils import timezone
 
 from common.http_client import get_breaker, RETRY
 from cortex_job.cortex_utils.session_cortex_api import SessionCortexApi  # noqa: F401 -- patch point in tests
@@ -385,13 +384,14 @@ class CortexJob:
             analyzer_report.save()
 
 class CortexJobManager:
+    # ponytail: no longer read; kept because older tests clear them. Job state lives in the
+    # per-reconcile cache handed to connectors.engines.refresh.
     _job_cache = {}
     _report_cache = {}
 
     def __init__(self):
         self.case = None
-        CortexJobManager._job_cache.clear()
-        CortexJobManager._report_cache.clear()
+        self._fetch_cache = {}  # one per manager, so one per reconcile_case_core call
 
         _cc = _get_cortex_config()
         self.api_urls = _cc.get("url", "https://cortex.example.com")
@@ -446,74 +446,22 @@ class CortexJobManager:
         ]:
             raise ValueError(f"Invalid data_type: {data_type}")
 
+        from connectors.base import FETCH_GONE, FETCH_RESULT, FETCH_UNKNOWN, FetchResult
+        from connectors.engines import update_report
+
         job_id = report_instance.cortex_job_id
-
-        job = cls._job_cache.get(job_id)
-        if job is None:
-            job = cls.get_job_from_api(job_id)
-            cls._job_cache[job_id] = job
-
+        job = cls.get_job_from_api(job_id)
         if job == "old_job":
-            if report_instance.status != "Deleted":
-                report_instance.status = "Deleted"
-                report_instance.save(update_fields=["status"])
-            return report_instance.status
-
-        if job and (
-            job.dataType == data_type
-            or (data_type == "mail_body" and job.dataType == "file")
-        ):
-            report = cls._report_cache.get(job_id)
-            if report is None:
-                report = cls.get_report_from_api(job_id)
-                cls._report_cache[job_id] = report
-
-            if report:
-                try:
-                    updated_fields = cls.update_report_instance(
-                        report_instance, job, report
-                    )
-                    if updated_fields:
-                        report_instance.save(update_fields=updated_fields)
-                except Exception as e:
-                    update_cases_logger.error(
-                        f"Error updating report {job_id}: {e}", exc_info=True
-                    )
-
-            if job.status == "Success":
-                try:
-                    from score_process.scoring.cortex_analyzers.reports import (
-                        CortexAnalyzerReports,
-                    )
-                    artifact_value = cls._artifact_value(report_instance)
-                    CortexAnalyzerReports.create_and_save_report(
-                        report_instance, artifact_value, None
-                    )
-                except Exception as e:
-                    update_cases_logger.error(
-                        f"Error scoring report {job_id}: {e}", exc_info=True
-                    )
-
-        if report_instance.status in {"Waiting", "InProgress"}:
-            submitted_at = (
-                CaseAnalyzerJob.objects
-                .filter(cortex_job_id=job_id)
-                .order_by("created_at")
-                .values_list("created_at", flat=True)
-                .first()
-            ) or report_instance.creation_date
-            if submitted_at is not None:
-                age = (timezone.now() - submitted_at).total_seconds()
-                stale_timeout = int(_get_cortex_config().get("stale_job_timeout_seconds", DEFAULT_STALE_JOB_TIMEOUT_SECONDS))
-                if age > stale_timeout:
-                    update_cases_logger.warning(
-                        "Auto-failing stale %s report cortex_job_id=%s after %.0fs",
-                        report_instance.status, job_id, age,
-                    )
-                    report_instance.status = "Failure"
-                    report_instance.save(update_fields=["status"])
-
-        return report_instance.status
+            fetched = FetchResult(FETCH_GONE)
+        elif not job:
+            fetched = FetchResult(FETCH_UNKNOWN)
+        else:
+            report = cls.get_report_from_api(job_id) or {}
+            fetched = FetchResult(
+                FETCH_RESULT, job.status, report.get("summary"), report.get("full"), data_type=job.dataType,
+            )
+        stale_timeout = int(_get_cortex_config().get("stale_job_timeout_seconds", DEFAULT_STALE_JOB_TIMEOUT_SECONDS))
+        return update_report(report_instance, fetched, stale_timeout)
 
     @staticmethod
     def get_job_from_api(job_id):
@@ -588,69 +536,17 @@ class CortexJobManager:
                 )
         return None
 
-    @staticmethod
-    def update_report_instance(report_instance, job, report):
-        """
-        Update report_instance fields efficiently, return list of changed fields.
-        """
-        if not all([report_instance, job, report]):
-            raise ValueError("report_instance, job, and report cannot be None")
-        if not hasattr(job, "status"):
-            raise AttributeError("job object has no attribute 'status'")
-
-        updated_fields = []
-
-        if report_instance.status != job.status:
-            report_instance.status = job.status
-            updated_fields.append("status")
-
-        if job.status == "Success" and isinstance(report, dict):
-            summary = report.get("summary")
-            if summary and summary != getattr(report_instance, "report_summary", None):
-                report_instance.report_summary = summary
-                updated_fields.append("report_summary")
-
-            taxonomies = summary.get("taxonomies") if summary else None
-            if taxonomies and taxonomies != getattr(
-                report_instance, "report_taxonomy", None
-            ):
-                report_instance.report_taxonomy = taxonomies
-                updated_fields.append("report_taxonomy")
-
-            full = report.get("full")
-            if full and full != getattr(report_instance, "report_full", None):
-                report_instance.report_full = full
-                updated_fields.append("report_full")
-
-        return updated_fields
-
     def get_new_reports(self, data_type, filter_kwargs):
         """
         Fetch all non-Deleted AnalyzerReport objects for this data_type
-        and artifact filter. Cortex API calls are deduplicated via the
-        class-level _job_cache / _report_cache during a single tick.
+        and artifact filter.
         """
         return AnalyzerReport.objects.filter(
             type=data_type, **filter_kwargs
         ).exclude(status="Deleted")
 
     def update_single_job(self, caj) -> None:
-        """Sync a single CaseAnalyzerJob + its AnalyzerReport from Cortex.
+        """Sync one CaseAnalyzerJob and its report through its engine (connectors.engines.refresh)."""
+        from connectors.engines import refresh
 
-        Mirrors the per-report logic from get_cortex_jobs_results but scoped
-        to a single (case, cortex_job_id) pair. The CaseAnalyzerJob status
-        is updated to match the AnalyzerReport status returned by Cortex.
-        Completed_at is set when the job leaves the pending states.
-        """
-        from cortex_job.models import CaseAnalyzerJob
-        report = caj.analyzer_report
-        if report is None:
-            return
-        data_type = report.type
-        new_status = self.get_cortex_jobs_results(report, data_type)
-
-        if new_status and new_status != caj.status:
-            caj.status = new_status
-            if new_status not in CaseAnalyzerJob.PENDING_STATUSES:
-                caj.completed_at = timezone.now()
-            caj.save(update_fields=["status", "completed_at"])
+        refresh(caj, self._fetch_cache)

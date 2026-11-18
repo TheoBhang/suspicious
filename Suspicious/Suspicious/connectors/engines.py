@@ -11,8 +11,15 @@ import dataclasses
 import logging
 
 from django.db import transaction
+from django.utils import timezone
 
-from connectors.base import PROVIDER_KIND_ANALYSIS, CatalogEntry
+from connectors.base import (
+    FETCH_GONE,
+    FETCH_RESULT,
+    PROVIDER_KIND_ANALYSIS,
+    CatalogEntry,
+    FetchResult,
+)
 from connectors.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -172,7 +179,6 @@ def _start(connector, name, entry, value, data_type, data_value, case) -> str | 
         logger.debug("Engine %s refused %s on %s", name, entry.name, data_type)
         return None
 
-    # Task 4 adds the finished-result path; until then started.finished is ignored (row pending).
     try:
         job_id = ledger_ids(name, str(started.job_id), "")[0]
     except ValueError:
@@ -195,11 +201,152 @@ def _start(connector, name, entry, value, data_type, data_value, case) -> str | 
             report_taxonomy={"ongoing": "analysis"},
         )
         CortexJob.set_analyzer_report_data(analyzer_report, value, data_type)
+        finished = started.finished
+        status = CaseAnalyzerJob.STATUS_INPROGRESS
+        if finished:  # an instant engine: store the result now, the row never waits for refresh
+            fields = apply_result(analyzer_report, finished)
+            if fields:
+                analyzer_report.save(update_fields=fields)
+            status = analyzer_report.status
         CaseAnalyzerJob.objects.create(
             case=case,
             cortex_job_id=job_id,
             analyzer=analyzer_db,
             analyzer_report=analyzer_report,
-            status=CaseAnalyzerJob.STATUS_INPROGRESS,
+            status=status,
+            completed_at=None if status in CaseAnalyzerJob.PENDING_STATUSES else timezone.now(),
         )
+    if finished and finished.status == "Success":
+        _score(analyzer_report)
     return job_id
+
+
+# ── refresh: reconcile reads job results through the engine ────────────────
+
+DEFAULT_STALE_JOB_TIMEOUT_SECONDS = 7200
+_PENDING_REPORT = ("Waiting", "InProgress")
+
+
+def apply_result(report_instance, result: FetchResult) -> list[str]:
+    """Set the result's status, and on Success its summary, taxonomies and full, on the
+    report; returns the changed field names (not saved). CortexJobManager.update_report_instance."""
+    updated_fields = []
+    if report_instance.status != result.status:
+        report_instance.status = result.status
+        updated_fields.append("status")
+    if result.status == "Success":
+        summary = result.summary
+        if summary and summary != report_instance.report_summary:
+            report_instance.report_summary = summary
+            updated_fields.append("report_summary")
+        taxonomies = summary.get("taxonomies") if summary else None
+        if taxonomies and taxonomies != report_instance.report_taxonomy:
+            report_instance.report_taxonomy = taxonomies
+            updated_fields.append("report_taxonomy")
+        if result.full and result.full != report_instance.report_full:
+            report_instance.report_full = result.full
+            updated_fields.append("report_full")
+    return updated_fields
+
+
+def _score(report_instance) -> None:
+    from cortex_job.cortex_utils.cortex_and_job_management import CortexJobManager
+    from score_process.scoring.cortex_analyzers.reports import CortexAnalyzerReports
+
+    try:
+        CortexAnalyzerReports.create_and_save_report(
+            report_instance, CortexJobManager._artifact_value(report_instance), None
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Error scoring report %s: %s", report_instance.cortex_job_id, exc, exc_info=True)
+
+
+def update_report(report_instance, fetched: FetchResult, stale_timeout: int) -> str:
+    """Write one fetched job onto its report, as get_cortex_jobs_results did; returns the status.
+    gone: Deleted. unknown: nothing. result of the report's data type: the status, and the body
+    when there is one; Success is scored. A report still pending past ``stale_timeout`` fails."""
+    from cortex_job.models import CaseAnalyzerJob
+
+    job_id = report_instance.cortex_job_id
+    if fetched.state == FETCH_GONE:
+        if report_instance.status != "Deleted":
+            report_instance.status = "Deleted"
+            report_instance.save(update_fields=["status"])
+        return report_instance.status
+
+    data_type = report_instance.type
+    if fetched.state == FETCH_RESULT and (
+        not fetched.data_type
+        or fetched.data_type == data_type
+        or (data_type == "mail_body" and fetched.data_type == "file")
+    ):
+        # The original wrote nothing when Cortex returned no report (a failed report read):
+        # a Success with no body keeps the current status. A Failure carries no summary or
+        # full (Cortex sends errorMessage) yet was written, so only Success needs a body.
+        if fetched.summary is not None or fetched.full is not None or fetched.status != "Success":
+            try:
+                updated_fields = apply_result(report_instance, fetched)
+                if updated_fields:
+                    report_instance.save(update_fields=updated_fields)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Error updating report %s: %s", job_id, exc, exc_info=True)
+        if fetched.status == "Success":
+            _score(report_instance)
+
+    if report_instance.status in _PENDING_REPORT:
+        submitted_at = (
+            CaseAnalyzerJob.objects
+            .filter(cortex_job_id=job_id)
+            .order_by("created_at")
+            .values_list("created_at", flat=True)
+            .first()
+        ) or report_instance.creation_date
+        if submitted_at is not None:
+            age = (timezone.now() - submitted_at).total_seconds()
+            if age > stale_timeout:
+                logger.warning(
+                    "Auto-failing stale %s report cortex_job_id=%s after %.0fs",
+                    report_instance.status, job_id, age,
+                )
+                report_instance.status = "Failure"
+                report_instance.save(update_fields=["status"])
+    return report_instance.status
+
+
+def _external_job_id(name: str, ledger_job_id: str) -> str:
+    """Inverse of ledger_ids for the job id."""
+    prefix = f"{name}-"
+    if name != "cortex" and ledger_job_id.startswith(prefix):
+        return ledger_job_id[len(prefix):]
+    return ledger_job_id
+
+
+def refresh(caj, cache: dict | None = None) -> None:
+    """Sync one CaseAnalyzerJob and its report from the engine that owns its analyzer.
+    ``cache`` (ledger job id -> FetchResult) makes rows sharing a job fetch it once.
+    A disabled engine is still fetched: its started jobs must finish."""
+    report = caj.analyzer_report
+    if report is None:  # a provider row (ai_model): its task closes it
+        return
+    name = caj.analyzer.source
+    if name not in registry.names():
+        logger.warning("No engine %r registered for job %s: not refreshed", name, caj.cortex_job_id)
+        return
+    engine = registry.instantiate(name)
+    cache = {} if cache is None else cache
+    fetched = cache.get(caj.cortex_job_id)
+    if fetched is None:
+        fetched = cache[caj.cortex_job_id] = engine.fetch(_external_job_id(name, caj.cortex_job_id))
+    stale_timeout = int(engine.config.get("stale_job_timeout_seconds", DEFAULT_STALE_JOB_TIMEOUT_SECONDS))
+    close_row(caj, update_report(report, fetched, stale_timeout))
+
+
+def close_row(caj, new_status) -> None:
+    """The row mirrors its report; completed_at is set when it leaves the pending states."""
+    from cortex_job.models import CaseAnalyzerJob
+
+    if new_status and new_status != caj.status:
+        caj.status = new_status
+        if new_status not in CaseAnalyzerJob.PENDING_STATUSES:
+            caj.completed_at = timezone.now()
+        caj.save(update_fields=["status", "completed_at"])

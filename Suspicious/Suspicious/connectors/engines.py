@@ -422,3 +422,74 @@ def handle_webhook(connector_name: str, headers, payload) -> tuple[int, dict]:
         reconcile_case.delay(case_id)
         logger.info("Queued %s update for case=%s jobId=%s", connector_name, case_id, ",".join(fresh))
     return 202, {"detail": f"Queued update for {len(case_ids)} case(s)."}
+
+
+# ── catalogue sync ─────────────────────────────────────────────────────────
+
+log_sync = logging.getLogger("tasp.cron.fetch_analyzer")
+
+
+def sync_catalog(connector_name: str) -> int:
+    """Mirror the engine's whole catalogue into ``Analyzer``; returns the number synced."""
+    return sync_connector_catalog(connector_name, registry.instantiate(connector_name))
+
+
+def sync_connector_catalog(name: str, connector) -> int:
+    """sync_catalog for an already built connector. A fetch failure propagates."""
+    from cortex_job.cortex_utils.cortex_and_job_management import ai_analyzer_name
+    from cortex_job.migrations._tier_seed import tier_for
+    from cortex_job.models import Analyzer
+
+    offered = connector.catalog()
+    if not offered:
+        return 0
+
+    synced = []
+    with transaction.atomic():
+        for entry in offered:
+            owner = Analyzer.objects.filter(name=entry.name).values_list("source", flat=True).first()
+            if owner is not None and owner != name:
+                # Analyzer.name is unique across sources: another connector owns this one.
+                log_sync.error("%s offers analyzer %r but it belongs to %r; skipped.", name, entry.name, owner)
+                continue
+            try:
+                analyzer_id = ledger_ids(name, "", str(entry.id))[1]
+            except ValueError:
+                log_sync.error("%s analyzer %r: id too long; skipped.", name, entry.name)
+                continue
+            defaults = {"analyzer_cortex_id": analyzer_id, "is_active": True, "source": name}
+            Analyzer.objects.update_or_create(
+                name=entry.name, defaults=defaults, create_defaults={**defaults, "tier": tier_for(entry.name)},
+            )
+            synced.append(entry.name)
+        # The AI vote's row (ai_model connector) is no engine analyzer: leave it active.
+        Analyzer.objects.filter(source=name).exclude(name__in=[*synced, ai_analyzer_name()]).update(is_active=False)
+
+    if name == "cortex":
+        _warn_on_unresolved_configured_analyzers(synced)
+    return len(synced)
+
+
+def _warn_on_unresolved_configured_analyzers(offered_names: list[str]) -> None:
+    """integrations.cortex.analyzers.{header,sandbox,yara,file_info} are plain names that
+    dispatch looks up at start time; a miss there is one warning among hundreds (this is how
+    "header": "MailHeader_4_0" once sat wrong unnoticed). Cross-check them against the
+    catalogue just fetched, which is the authoritative current set, and log loudly."""
+    try:
+        from settings.config import get_section
+        configured = get_section("integrations.cortex").get("analyzers", {}) or {}
+    except Exception as exc:  # noqa: BLE001
+        log_sync.error("Could not load integrations.cortex.analyzers to validate: %s", exc)
+        return
+
+    offered = set(offered_names)
+    for role, name in configured.items():
+        # ai names the AI vote's Analyzer row (ai_model connector), not an engine analyzer.
+        if role != "ai" and name and name not in offered:
+            log_sync.error(
+                "integrations.cortex.analyzers.%s = %r does not match any analyzer "
+                "currently enabled in Cortex; dispatch for this role will silently "
+                "find nothing every time. Check the analyzer's real registered name "
+                "(Cortex organization analyzer list) against settings.json.",
+                role, name,
+            )

@@ -48,8 +48,11 @@ class CatalogTest(SimpleTestCase):
             api.return_value.analyzers.get_by_name.side_effect = NotFoundError("x")
             self.assertEqual(conn().catalog(name="nope"), [])
 
-    def test_unfiltered_is_empty(self):
-        self.assertEqual(conn().catalog(), [])
+    def test_unfiltered_lists_the_whole_catalogue(self):
+        remote = mock.Mock(id="i1")
+        remote.name = "A1"
+        with mock.patch("tasp.cron.sync_cortex._fetch_all_analyzers", return_value=[remote]), mock.patch(API):
+            self.assertEqual([(e.id, e.name) for e in conn().catalog()], [("i1", "A1")])
 
 
 class StartTest(SimpleTestCase):

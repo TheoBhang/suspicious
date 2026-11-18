@@ -132,9 +132,8 @@ class CortexConnector(Connector):
         return self._client
 
     def catalog(self, data_type: str | None = None, name: str | None = None) -> list[CatalogEntry]:
-        # ponytail: the unfiltered form (full catalogue) lands with the sync switch-over.
         if not data_type and not name:
-            return []
+            return self._full_catalog()
         try:
             api = self._api()
             found = api.analyzers.get_by_name(name) if name else api.analyzers.get_by_type(data_type)
@@ -146,6 +145,22 @@ class CortexConnector(Connector):
         except Exception as exc:  # noqa: BLE001: a failed lookup is an empty catalogue
             logger.warning("cortex catalog lookup failed: %s", type(exc).__name__)
             return []
+
+    guarded = False  # True: _fetch_all_analyzers wraps the "cortex" breaker itself (legacy, non-strict sync)
+
+    def _full_catalog(self) -> list[CatalogEntry]:
+        """Every analyzer enabled for the org. Unlike the filtered lookups it raises on failure,
+        so a failed sync is a failed sync."""
+        from cortex4py.exceptions import AuthenticationError
+
+        from tasp.cron import sync_cortex
+
+        try:
+            found = sync_cortex._fetch_all_analyzers(self._api(), guarded=self.guarded)
+        except AuthenticationError as exc:
+            exc.retryable = False  # a revoked or wrong API key waits for an operator, not a retry
+            raise
+        return [CatalogEntry(a.id, a.name, ()) for a in found]  # the sync needs no data types
 
     def start(self, analyzer: CatalogEntry, data_type: str, value: str) -> StartResult | None:
         if not value or not str(value).strip():

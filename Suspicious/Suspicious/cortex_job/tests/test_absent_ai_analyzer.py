@@ -4,7 +4,7 @@ Analyzer row). The code that reads it must work when the key is absent."""
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import TestCase
 
 from score_process.scoring.cortex_analyzers.reports import CortexAnalyzerReports
 from tasp.tests.test_sync_cortex import _fake_cron_config
@@ -14,7 +14,7 @@ NO_AI = {"analyzers": {"header": "Mail_Header_Analyzer_1_0", "yara": "Yara_2_0",
 CFG = "cortex_job.cortex_utils.cortex_and_job_management._get_cortex_config"
 
 
-class AbsentAiAnalyzerTests(SimpleTestCase):
+class AbsentAiAnalyzerTests(TestCase):
     def test_the_selection_policy_still_keeps_the_eml_file_analyzers(self):
         # launch_cortex_jobs now forwards to connectors.engines.dispatch: the policy lives there.
         from connectors.base import CatalogEntry
@@ -46,11 +46,8 @@ class AbsentAiAnalyzerTests(SimpleTestCase):
         with patch("tasp.cron.sync_cortex.load_config", return_value=_fake_cron_config()), \
                 patch("cortex_job.cortex_utils.session_cortex_api.SessionCortexApi.do_get") as get, \
                 patch("settings.config.get_section", return_value=NO_AI), \
-                patch("tasp.cron.sync_cortex.transaction"), \
-                patch("tasp.cron.sync_cortex.Analyzer"), \
-                patch("tasp.cron.sync_cortex.log_analyzers") as log:
+                patch("connectors.engines.log_sync") as log:
             get.return_value.json.return_value = remote
-            sync_cortex.Analyzer.objects.filter.return_value.values_list.return_value.first.return_value = None
             sync_cortex_analyzers()
         log.error.assert_not_called()
         log.warning.assert_not_called()

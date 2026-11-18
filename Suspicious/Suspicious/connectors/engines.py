@@ -386,7 +386,13 @@ def handle_webhook(connector_name: str, headers, payload) -> tuple[int, dict]:
     if registry.get(connector_name).manifest.provides != PROVIDER_KIND_ANALYSIS:
         return 404, {"detail": "Not found."}
     try:
-        announced = registry.instantiate(connector_name).webhook(headers, payload)
+        try:
+            engine = registry.instantiate(connector_name)
+        except Exception as exc:  # noqa: BLE001: runtime config unreadable; log the class only
+            logger.error("%s webhook: config unreadable (%s), using an empty config",
+                         connector_name, type(exc).__name__)
+            engine = registry.get(connector_name)({})  # so the settings secret is the fallback
+        announced = engine.webhook(headers, payload)
     except NotImplementedError:
         return 404, {"detail": "Not found."}
     except WebhookNotConfigured:
@@ -397,22 +403,22 @@ def handle_webhook(connector_name: str, headers, payload) -> tuple[int, dict]:
         return 401, {"detail": "Unauthorized."}
 
     cache.set(f"{connector_name}_last_webhook_at", time.time(), timeout=None)
-    if not announced:
+    if not announced:  # also a whitespace-only jobId: deliberately 400, no longer a 202
         return 400, {"detail": "jobId is required."}
 
-    dedup_prefix = "cortex_job_processed" if connector_name == "cortex" else f"{connector_name}_job_processed"
-    fresh = [j for j in announced if cache.add(f"{dedup_prefix}:{j}", 1, timeout=WEBHOOK_DEDUP_TTL)]
+    fresh = [j for j in announced if cache.add(f"{connector_name}_job_processed:{j}", 1, timeout=WEBHOOK_DEDUP_TTL)]
     if not fresh:
-        logger.info("%s webhook: duplicate delivery; skipping", connector_name)
+        logger.info("%s webhook duplicate jobId=%s; skipping", connector_name, ",".join(announced))
         return 200, {"detail": "Already processed."}
 
     case_ids = sorted({c for j in fresh for c in _pending_case_ids(connector_name, j)})
     if not case_ids:
-        logger.info("%s webhook: no pending job; cron fallback covers it", connector_name)
+        logger.info("%s webhook: no pending job for jobId=%s; cron fallback covers it",
+                    connector_name, ",".join(fresh))
         return 202, {"detail": "No pending case found."}
 
     from tasp.tasks import reconcile_case
     for case_id in case_ids:
         reconcile_case.delay(case_id)
-        logger.info("Queued %s update for case=%s", connector_name, case_id)
+        logger.info("Queued %s update for case=%s jobId=%s", connector_name, case_id, ",".join(fresh))
     return 202, {"detail": f"Queued update for {len(case_ids)} case(s)."}

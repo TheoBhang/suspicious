@@ -103,6 +103,22 @@ class CortexOnGenericRouteTest(TestCase):
         self.post()
         self.assertIsNotNone(cache.get("cortex_job_processed:job-1"))
 
+    def test_unreadable_config_falls_back_to_setting(self):
+        with patch("connectors.engines.registry.instantiate", side_effect=RuntimeError("boom")), \
+                patch(DELAY) as delay:
+            self.assertEqual(self.post(token="wrong").status_code, 401)
+            self.assertEqual(self.post().status_code, 202)
+        delay.assert_called_once_with(self.case.id)
+
+    def test_bad_token_beats_missing_job_id(self):
+        for url in (URL, "/api/cortex/webhook/"):
+            self.assertEqual(self.post({}, token="wrong", url=url).status_code, 401)
+
+    @override_settings(CORTEX_WEBHOOK_SECRET="")
+    def test_unconfigured_beats_bad_token(self):
+        for url in (URL, "/api/cortex/webhook/"):
+            self.assertEqual(self.post(token="wrong", url=url).status_code, 503)
+
     def test_unknown_connector_404(self):
         self.assertEqual(self.post(url="/api/connectors/nope/webhook/").status_code, 404)
 

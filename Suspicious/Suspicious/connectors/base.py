@@ -178,6 +178,35 @@ class CaseEvent:
         return cls(**data)
 
 
+FETCH_RESULT = "result"
+FETCH_GONE = "gone"
+FETCH_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    """One analyzer an analysis engine offers."""
+    id: str
+    name: str
+    data_types: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    """A job lookup. ``status`` (Waiting|InProgress|Success|Failure) is set
+    when ``state`` is FETCH_RESULT."""
+    state: str
+    status: str = ""
+    summary: dict | None = None
+    full: dict | None = None
+
+
+@dataclass(frozen=True)
+class StartResult:
+    job_id: str
+    finished: FetchResult | None = None
+
+
 class Connector(ABC):
     """Base class for all connectors. Subclasses set ``manifest`` and
     implement ``health_check`` plus whichever hooks they subscribe to."""
@@ -209,4 +238,18 @@ class Connector(ABC):
     def analyze(self, kind: str, case_id: int) -> ProviderResult:  # pragma: no cover
         """Analysis-provider hook: implemented by connectors whose manifest
         ``provides`` the given kind."""
+        raise NotImplementedError
+
+    def catalog(self, data_type: str | None = None, name: str | None = None) -> list[CatalogEntry]:  # pragma: no cover
+        raise NotImplementedError
+
+    def start(self, analyzer: CatalogEntry, data_type: str, value: str) -> StartResult | None:  # pragma: no cover
+        """None means the engine refused the job."""
+        raise NotImplementedError
+
+    def fetch(self, job_id: str) -> FetchResult:  # pragma: no cover
+        raise NotImplementedError
+
+    def webhook(self, headers: dict, payload: dict) -> list[str] | None:  # pragma: no cover
+        """Job ids announced; None means rejected as unauthenticated."""
         raise NotImplementedError

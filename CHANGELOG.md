@@ -155,6 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Scheduled connector syncs now write at most one success row per hour to the delivery ledger (failures are always written), which changes what the Watcher deliveries list shows.
 - Case report (HTML and Markdown) redesigned: one block per indicator with type-specific details
   (location, Whois/RDAP, categorization, URL, hash, VirusTotal), key findings and a connector
   summary ordered by severity with a legend; mail and file cases now show their indicators and

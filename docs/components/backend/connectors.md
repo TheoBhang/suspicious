@@ -27,6 +27,10 @@ the sync only deactivates `cortex` rows. Disabling the last enabled `analysis` c
 Known limit: the enabled flag gates only the sync and the UI; job starts, the webhook and
 reconcile still use Cortex whatever it says.
 
+- `stale_job_timeout_seconds` is stored but not used until the engine layer ships; `fail_stale_jobs` still uses the single configured timeout.
+- On upgrade, disable any old Cortex-side `AI_Mail_Analyzer` analyzer in Cortex. Otherwise the sync logs an ERROR about it every minute, because the row now belongs to the `ai_model` connector.
+- `/api/cortex/webhook/` now reads its secret through the runtime config layer (Vault-backed, cached 60 s) instead of only at boot.
+
 ## ai_model
 
 The mail AI classifier. It is off by default (`enabled_by_default=False`).

@@ -11,7 +11,7 @@ from cortex4py.exceptions import (
 )
 from django.test import SimpleTestCase, override_settings
 
-from connectors.base import CatalogEntry, FetchResult, StartResult
+from connectors.base import CatalogEntry, FetchResult, StartResult, WebhookNotConfigured
 from connectors.contrib.cortex.connector import CortexConnector
 
 API = "cortex_job.cortex_utils.session_cortex_api.SessionCortexApi"
@@ -185,4 +185,5 @@ class WebhookTest(SimpleTestCase):
         cfg = {"url": "u", "api_key": "k"}
         self.assertEqual(self.hook({"jobId": "j"}, token="fallback", config=cfg), ["j"])
         with override_settings(CORTEX_WEBHOOK_SECRET=""):
-            self.assertIsNone(self.hook({"jobId": "j"}, token="", config=cfg))
+            with self.assertRaises(WebhookNotConfigured):
+                self.hook({"jobId": "j"}, token="", config=cfg)

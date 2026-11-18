@@ -19,6 +19,7 @@ from connectors.base import (
     PROVIDER_KIND_ANALYSIS,
     CatalogEntry,
     FetchResult,
+    WebhookNotConfigured,
 )
 from connectors.registry import registry
 
@@ -350,3 +351,68 @@ def close_row(caj, new_status) -> None:
         if new_status not in CaseAnalyzerJob.PENDING_STATUSES:
             caj.completed_at = timezone.now()
         caj.save(update_fields=["status", "completed_at"])
+
+
+# ── webhook: an engine announces finished jobs ─────────────────────────────
+
+WEBHOOK_DEDUP_TTL = 3600
+
+
+def _pending_case_ids(name: str, ext_job_id: str) -> list[int]:
+    from cortex_job.models import CaseAnalyzerJob
+
+    try:
+        ledger_id = ledger_ids(name, ext_job_id, "")[0]
+    except ValueError:  # too long for the ledger: no row can carry it
+        return []
+    return list(
+        CaseAnalyzerJob.objects
+        .filter(cortex_job_id=ledger_id, status__in=CaseAnalyzerJob.PENDING_STATUSES)
+        .values_list("case_id", flat=True)
+        .distinct()
+    )
+
+
+def handle_webhook(connector_name: str, headers, payload) -> tuple[int, dict]:
+    """Authenticate through the engine, drop duplicates, and queue reconcile_case for the cases
+    owning the announced jobs. Returns (http status, body). A disabled engine is still accepted:
+    its started jobs must finish."""
+    import time
+
+    from django.core.cache import cache
+
+    if connector_name not in registry.names():
+        return 404, {"detail": "Not found."}
+    if registry.get(connector_name).manifest.provides != PROVIDER_KIND_ANALYSIS:
+        return 404, {"detail": "Not found."}
+    try:
+        announced = registry.instantiate(connector_name).webhook(headers, payload)
+    except NotImplementedError:
+        return 404, {"detail": "Not found."}
+    except WebhookNotConfigured:
+        logger.error("%s webhook secret not configured, webhook rejected", connector_name)
+        return 503, {"detail": "Webhook not configured."}
+    if announced is None:
+        logger.warning("%s webhook: invalid or missing credentials", connector_name)
+        return 401, {"detail": "Unauthorized."}
+
+    cache.set(f"{connector_name}_last_webhook_at", time.time(), timeout=None)
+    if not announced:
+        return 400, {"detail": "jobId is required."}
+
+    dedup_prefix = "cortex_job_processed" if connector_name == "cortex" else f"{connector_name}_job_processed"
+    fresh = [j for j in announced if cache.add(f"{dedup_prefix}:{j}", 1, timeout=WEBHOOK_DEDUP_TTL)]
+    if not fresh:
+        logger.info("%s webhook: duplicate delivery; skipping", connector_name)
+        return 200, {"detail": "Already processed."}
+
+    case_ids = sorted({c for j in fresh for c in _pending_case_ids(connector_name, j)})
+    if not case_ids:
+        logger.info("%s webhook: no pending job; cron fallback covers it", connector_name)
+        return 202, {"detail": "No pending case found."}
+
+    from tasp.tasks import reconcile_case
+    for case_id in case_ids:
+        reconcile_case.delay(case_id)
+        logger.info("Queued %s update for case=%s", connector_name, case_id)
+    return 202, {"detail": f"Queued update for {len(case_ids)} case(s)."}

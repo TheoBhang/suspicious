@@ -22,6 +22,7 @@ from connectors.base import (
     HealthStatus,
     Schedule,
     StartResult,
+    WebhookNotConfigured,
 )
 
 logger = logging.getLogger(__name__)
@@ -211,8 +212,10 @@ class CortexConnector(Connector):
         from django.conf import settings
 
         secret = self.config.get("webhook_secret") or getattr(settings, "CORTEX_WEBHOOK_SECRET", "")
+        if not secret:
+            raise WebhookNotConfigured("webhook_secret")
         auth = headers.get("Authorization", "")
-        if not secret or not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], secret):
+        if not auth.startswith("Bearer ") or not hmac.compare_digest(auth[7:], secret):
             return None
         job_id = str(payload.get("jobId") or payload.get("job_id") or "").strip()
         return [job_id] if job_id else []

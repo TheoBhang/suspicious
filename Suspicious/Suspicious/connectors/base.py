@@ -99,6 +99,10 @@ class HealthStatus:
     detail: str = ""
 
 
+class WebhookNotConfigured(Exception):
+    """The connector has no webhook secret: its webhook cannot authenticate anyone."""
+
+
 @dataclass(frozen=True)
 class ConnectorManifest:
     name: str
@@ -252,5 +256,6 @@ class Connector(ABC):
         raise NotImplementedError
 
     def webhook(self, headers: dict, payload: dict) -> list[str] | None:  # pragma: no cover
-        """Job ids announced; None means rejected as unauthenticated."""
+        """Job ids announced; None means rejected as unauthenticated. Raises WebhookNotConfigured
+        when the connector has no webhook secret at all."""
         raise NotImplementedError

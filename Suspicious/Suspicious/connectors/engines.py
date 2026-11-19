@@ -148,9 +148,9 @@ def _dispatch_engine(name, value, data_type, data_value, case, roles, job_ids) -
 
     for entry in select_analyzers(data_type, value, offered, roles):
         owners = Analyzer.objects.filter(name=entry.name).exclude(source=name)
-        if name != "cortex":  # a row of the old provider path is adopted by _analyzer_row
-            owners = owners.exclude(analyzer_cortex_id__startswith=PROVIDER_ANALYZER_PREFIX)
-        if owners.exists():
+        if name != "cortex":  # rows _analyzer_row adopts are no conflict
+            owners = [o for o in owners.only("analyzer_cortex_id") if not _adoptable(entry, o.analyzer_cortex_id)]
+        if owners:
             logger.error("Engine %s offers analyzer %r, owned by another source: skipped", name, entry.name)
             continue
         try:
@@ -165,16 +165,25 @@ def _dispatch_engine(name, value, data_type, data_value, case, roles, job_ids) -
 PROVIDER_ANALYZER_PREFIX = "provider:"  # Analyzer rows created by the old provider path
 
 
+def _adoptable(entry, analyzer_cortex_id: str) -> bool:
+    """Whether a non-Cortex engine takes over an existing row of the entry's name from another
+    source: a row of the old provider path, or any row when the entry runs on mail_archive (no
+    observable: a row of that name can only be a wrong owner, such as a Cortex mirror)."""
+    return (analyzer_cortex_id.startswith(PROVIDER_ANALYZER_PREFIX)
+            or DATA_TYPE_MAIL_ARCHIVE in entry.data_types)
+
+
 def _analyzer_row(name, entry, analyzer_id):
     """The engine's Analyzer row. Cortex: by its raw id, as run_analyzer did. Any other engine:
-    by name first, adopting a row of the old provider path; created only when none has the name."""
+    by name first, adopting a row of the old provider path or, for a mail_archive entry, any row of
+    the name (its id kept); created only when none has the name."""
     from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
     from cortex_job.models import Analyzer
 
     if name != "cortex":
         row = Analyzer.objects.filter(name=entry.name).first()
         if row is not None:
-            if row.source != name and row.analyzer_cortex_id.startswith(PROVIDER_ANALYZER_PREFIX):
+            if row.source != name and _adoptable(entry, row.analyzer_cortex_id):
                 row.source = name
                 row.save(update_fields=["source"])
             return row
@@ -528,9 +537,11 @@ def sync_connector_catalog(name: str, connector) -> int:
     if not offered:
         return 0
 
-    synced = []
+    synced, ai_name = [], ai_analyzer_name()
     with transaction.atomic():
         for entry in offered:
+            if entry.name == ai_name:
+                continue  # the AI vote's row belongs to its own engine: never created or claimed here
             owner = Analyzer.objects.filter(name=entry.name).values_list("source", flat=True).first()
             if owner is not None and owner != name:
                 # Analyzer.name is unique across sources: another connector owns this one.
@@ -547,7 +558,7 @@ def sync_connector_catalog(name: str, connector) -> int:
             )
             synced.append(entry.name)
         # The AI vote's row (ai_model connector) is no engine analyzer: leave it active.
-        Analyzer.objects.filter(source=name).exclude(name__in=[*synced, ai_analyzer_name()]).update(is_active=False)
+        Analyzer.objects.filter(source=name).exclude(name__in=[*synced, ai_name]).update(is_active=False)
 
     if name == "cortex":
         _warn_on_unresolved_configured_analyzers(synced)

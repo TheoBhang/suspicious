@@ -12,8 +12,9 @@ from ai_model.models import AiAssessment
 from connectors import base, engines, providers, tasks
 from connectors.base import ConnectorManifest
 from connectors.contrib.ai_model.connector import AiModelConnector
-from connectors.contrib.ai_model.tests.test_connector import make_mail_case
+from connectors.contrib.ai_model.tests.test_connector import CONFIG, make_mail_case
 from connectors.contrib.ai_model.tests.test_engine_path import DANGEROUS_FIELDS, EnginePathMixin
+from connectors.contrib.cortex.connector import CortexConnector
 from connectors.models import ConnectorDelivery
 from connectors.providers import ProviderUnavailable
 from connectors.registry import ConnectorRegistry
@@ -83,12 +84,12 @@ class EngineLayerIsAiFreeTest(SimpleTestCase):
 class ForwarderTest(EnginePathMixin, TestCase):
     """run_provider_analysis(case_id, kind, job_id) as an old worker queued it."""
 
-    def old_row(self, case=None, source="ai_model"):
+    def old_row(self, case=None, source="ai_model", analyzer_id=None):
         """What queue_provider_analysis wrote: a report-less pending row with a provider- id."""
         case = case or self.case
         name = ai_analyzer_name()
         analyzer, _ = Analyzer.objects.get_or_create(
-            name=name, defaults={"analyzer_cortex_id": "provider:" + name, "source": source})
+            name=name, defaults={"analyzer_cortex_id": analyzer_id or "provider:" + name, "source": source})
         mark_ai_missing(case)
         return CaseAnalyzerJob.objects.create(
             case=case, cortex_job_id="provider-" + uuid4().hex[:30], analyzer=analyzer,
@@ -151,6 +152,63 @@ class ForwarderTest(EnginePathMixin, TestCase):
         self.assertEqual(ConnectorDelivery.objects.get().connector, "ai_model")
 
 
+class ForwarderCortexRowTest(EnginePathMixin, TestCase):
+    """The prod shape: the AI row belongs to Cortex with a real Cortex id (old get_or_create took
+    whatever row had the name). The forwarder runs ai_model, never Cortex."""
+
+    engines = (AiModelConnector, CortexConnector)
+
+    def setUp(self):
+        super().setUp()
+        self.cortex = mock.Mock()
+        self.cortex.catalog.return_value = []  # enabled by default; offers nothing for the mail
+
+    def instantiate(self, name):
+        return self.cortex if name == "cortex" else AiModelConnector(CONFIG)
+
+    def test_a_cortex_owned_row_is_run_by_ai_model(self):
+        from common.http_client import get_breaker
+
+        row = ForwarderTest.old_row(self, source="cortex", analyzer_id="5f3a9c1d2e")
+        with mock.patch("common.http_client.get_breaker", wraps=get_breaker) as breaker:
+            ForwarderTest.forward(self, row.id)
+        self.cortex.run.assert_not_called()
+        self.assertNotIn(mock.call("cortex"), breaker.call_args_list)
+        row.refresh_from_db()
+        self.assertEqual(row.status, CaseAnalyzerJob.STATUS_SUCCESS)
+        self.assertEqual(ConnectorDelivery.objects.get().connector, "ai_model")
+
+        engine_case, _ = make_mail_case(n=2)
+        engine_row = CaseAnalyzerJob.objects.get(cortex_job_id=self.dispatch(engine_case)[0])
+        with self.captureOnCommitCallbacks(execute=True):
+            tasks.run_engine_job.apply(args=(engine_row.id,))
+        self.assertEqual(self.ai_fields(), DANGEROUS_FIELDS)
+        self.assertEqual(self.ai_fields(engine_case), self.ai_fields())
+        self.assertEqual(ForwarderTest.assessment(self, engine_case), ForwarderTest.assessment(self, self.case))
+
+
+class ForwarderWithoutAiModelTest(EnginePathMixin, TestCase):
+    engines = (CortexConnector,)  # the row's source is registered, ai_model is not
+
+    def setUp(self):
+        super().setUp()
+        self.cortex = mock.Mock()
+
+    def instantiate(self, name):
+        return self.cortex
+
+    def test_the_row_is_closed_failure_and_cortex_never_runs_it(self):
+        row = ForwarderTest.old_row(self, source="cortex", analyzer_id="5f3a9c1d2e")
+        ForwarderTest.forward(self, row.id)
+        row.refresh_from_db()
+        self.assertEqual(row.status, CaseAnalyzerJob.STATUS_FAILURE)
+        self.cortex.run.assert_not_called()
+        delivery = ConnectorDelivery.objects.get()
+        self.assertEqual((delivery.connector, delivery.status, delivery.error),
+                         ("ai_model", "failed", "no engine for this job"))
+        self.reconcile.delay.assert_called_once_with(self.case.id)
+
+
 class ForwarderWithoutEngineTest(EnginePathMixin, TestCase):
     engines = ()  # neither the row's source nor ai_model is registered
 
@@ -164,5 +222,5 @@ class ForwarderWithoutEngineTest(EnginePathMixin, TestCase):
         self.assertEqual(self.case.results_ai, "Inconclusive")
         delivery = ConnectorDelivery.objects.get()
         self.assertEqual((delivery.connector, delivery.event, delivery.status, delivery.error),
-                         ("gone_engine", "analyze", "failed", "no engine for this job"))
+                         ("ai_model", "analyze", "failed", "no engine for this job"))
         self.reconcile.delay.assert_called_once_with(self.case.id)

@@ -188,12 +188,26 @@ class DeferredTest(TestCase):
             self.assertEqual(self.dispatch(), ["deferred-job1"])
         self.assertEqual(CaseAnalyzerJob.objects.get().analyzer, Analyzer.objects.get())
 
-    def test_a_cortex_row_with_a_real_id_is_still_skipped(self):
+    def test_a_real_id_row_of_another_source_is_adopted_for_mail_archive(self):
+        # The prod shape: a Cortex-owned row with a real Cortex id. A mail_archive entry adopts it
+        # (id kept); a non-mail_archive entry with such a clash is still skipped
+        # (test_engines_dispatch.test_name_owned_by_another_source_is_skipped).
         Analyzer.objects.create(name="MailAI", analyzer_cortex_id="abc123", source="cortex")
-        with self.assertLogs("connectors.engines", "ERROR"):
-            self.assertEqual(self.dispatch(), [])
-        self.assertEqual(self.calls("start"), [])
-        self.assertEqual(Analyzer.objects.get().source, "cortex")
+        with self.assertNoLogs("connectors.engines", "ERROR"):
+            self.assertEqual(self.dispatch(), ["deferred-job1"])
+        analyzer = Analyzer.objects.get()
+        self.assertEqual((analyzer.source, analyzer.analyzer_cortex_id), ("deferred", "abc123"))
+        row = self.run_task(CaseAnalyzerJob.objects.get())
+        self.assertEqual(row.status, CaseAnalyzerJob.STATUS_SUCCESS)
+        self.assertEqual(len(self.calls("on_result")), 1)
+
+    def test_adoption_is_idempotent(self):
+        Analyzer.objects.create(name="MailAI", analyzer_cortex_id="abc123", source="cortex")
+        self.dispatch()
+        self.dispatch()
+        self.assertEqual(Analyzer.objects.count(), 1)
+        self.assertEqual(Analyzer.objects.get().source, "deferred")
+        self.assertEqual(set(CaseAnalyzerJob.objects.values_list("analyzer", flat=True)), {Analyzer.objects.get().pk})
 
     # ── run_engine_job ──────────────────────────────────────────────────────
 

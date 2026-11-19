@@ -37,7 +37,7 @@ from connectors.tasks import run_engine_job
 from cortex_job.cortex_utils.cortex_and_job_management import CortexJobManager, ai_analyzer_name
 from cortex_job.cortex_utils.reconciliation import reconcile_case_core
 from cortex_job.models import Analyzer, AnalyzerReport, CaseAnalyzerJob
-from mail_feeder.models import MailArchive, MailInfo
+from mail_feeder.models import MailArchive, MailBody, MailInfo
 from score_process.scoring.collect import collect_signals, collect_votes
 from tasp.tasks import dispatch_case_analysis
 
@@ -550,11 +550,16 @@ class EndToEndParityTest(EnginePathMixin, TestCase):
         return self.cortex if name == "cortex" else AiModelConnector(CONFIG)
 
     # What the retired provider path (queue_provider_analysis + finish_provider_analysis) gave for
-    # the same server answer, recorded from it before it was removed.
+    # the same mail (one safe Yara body report, so the blend reads the AI) and the same server
+    # answer, recorded by running it on a6b58fb5; and with the AI missing (no provider enabled).
     OLD_FIELDS = {"results_ai": "Dangerous", "score_ai": 7.0, "confidence_ai": 82.0,
-                  "category_ai": "Classic_phishing", "results": "Failure", "score": 5.0,
-                  "final_score": 5.0, "confidence": 0.0, "final_confidence": 0.0,
+                  "category_ai": "Classic_phishing", "results": "Suspicious", "score": 7.0,
+                  "final_score": 7.0, "confidence": 82.0, "final_confidence": 82.0,
                   "lifecycle_state": "FINALIZED", "inconclusive_reason": "", "verdict_rationale": []}
+    OLD_MISSING_FIELDS = {"results_ai": "Inconclusive", "score_ai": 0.0, "confidence_ai": 0.0,
+                          "category_ai": "Uncategorized", "results": "Inconclusive", "score": 2.0,
+                          "final_score": 2.0, "confidence": 60.0, "final_confidence": 60.0,
+                          "lifecycle_state": "FINALIZED", "inconclusive_reason": "", "verdict_rationale": []}
     OLD_ASSESSMENT = {
         "model_version": "v0", "result": "DANGEROUS", "sub_class": "CLASSIC_PHISHING", "score": 7.0,
         "confidence": 82.0, "probabilities": {"SAFE": "5.00%", "UNWANTED": "10.00%", "DANGEROUS": "85.00%"},
@@ -562,13 +567,35 @@ class EndToEndParityTest(EnginePathMixin, TestCase):
         "contributing_phrases": [["verify", 0.3]], "similar_cases": [], "campaign_embedding": "[0.1, 0.2]",
         "embedding_version": "cmp-e1", "latency_ms": 12}
 
-    @mock.patch("cortex_job.cortex_utils.reconciliation.emit_connector_event")
-    def test_the_ai_vote_and_verdict_equal_the_old_paths(self, _):
+    def add_body_report(self):
+        """A scored Cortex-style vote: a safe Yara report on the mail body."""
+        mail = self.case.fileOrMail.mail
+        mail.mail_body = MailBody.objects.create(body_value="hi", fuzzy_hash="parity-body")
+        mail.save(update_fields=["mail_body"])
+        analyzer = Analyzer.objects.create(name="Yara_Parity", analyzer_cortex_id="Yara_Parity", tier=2)
+        AnalyzerReport.objects.create(
+            cortex_job_id="parity-body", type="mail_body", status="Success", analyzer=analyzer,
+            mail_body=mail.mail_body, level="safe", confidence=60, score=2,
+            report_summary={}, report_taxonomy={}, report_full={})
+
+    def votes(self, case):
+        return sorted((v.analyzer, v.weight, v.band) for v in collect_votes(case, collect_signals(case)[1]))
+
+    def dispatch_ai_intent(self):
         with mock.patch("connectors.tasks.run_engine_job.delay") as delay, \
                 self.captureOnCommitCallbacks(execute=True):
             dispatch_case_analysis.run(self.case.id, [("mail_feeder.mailarchive", self.archive.pk, "ai_archive")])
+        return delay
+
+    def test_the_recorded_verdicts_depend_on_the_ai(self):
+        self.assertNotEqual(self.OLD_FIELDS["results"], self.OLD_MISSING_FIELDS["results"])
+
+    @mock.patch("cortex_job.cortex_utils.reconciliation.emit_connector_event")
+    def test_the_ai_vote_and_verdict_equal_the_old_paths(self, _):
+        self.add_body_report()
+        delay = self.dispatch_ai_intent()
         self.cortex.start.assert_not_called()
-        self.assertFalse(AnalyzerReport.objects.exists())
+        self.assertFalse(AnalyzerReport.objects.filter(analyzer__name=ai_analyzer_name()).exists())
         row = CaseAnalyzerJob.objects.get()
         self.assertEqual(row.analyzer.source, "ai_model")
         delay.assert_called_once_with(row.id)
@@ -578,12 +605,23 @@ class EndToEndParityTest(EnginePathMixin, TestCase):
         reconcile_case_core(Case.objects.get(pk=self.case.pk))
 
         new = Case.objects.get(pk=self.case.pk)
-        self.assertEqual(new.lifecycle_state, LifecycleState.FINALIZED)
         self.assertEqual({f: getattr(new, f) for f in self.OLD_FIELDS}, self.OLD_FIELDS)
         self.assertEqual(self.ai_fields(new), DANGEROUS_FIELDS)
-
-        votes = sorted((v.analyzer, v.weight, v.band) for v in collect_votes(new, collect_signals(new)[1]))
-        self.assertEqual(votes, [(ai_analyzer_name(), 0.2, Result.SUSPICIOUS)])
+        self.assertEqual(self.votes(new), [(ai_analyzer_name(), 0.2, Result.SUSPICIOUS),
+                                           ("Yara_Parity", 0.2, Result.SAFE)])
         fresh = {k: v for k, v in AiAssessment.objects.filter(case=new).values().get().items()
                  if k not in ("id", "case_id", "created_at", "updated_at")}
         self.assertEqual(fresh, self.OLD_ASSESSMENT)
+
+    @mock.patch("cortex_job.cortex_utils.reconciliation.emit_connector_event")
+    def test_the_verdict_with_the_ai_missing_equals_the_old_paths(self, _):
+        ConnectorState.objects.filter(name="ai_model").update(enabled=False)
+        self.add_body_report()
+        self.dispatch_ai_intent()
+        self.assertFalse(CaseAnalyzerJob.objects.exists())
+        reconcile_case_core(Case.objects.get(pk=self.case.pk))
+
+        new = Case.objects.get(pk=self.case.pk)
+        self.assertEqual({f: getattr(new, f) for f in self.OLD_MISSING_FIELDS}, self.OLD_MISSING_FIELDS)
+        self.assertEqual(self.votes(new), [("Yara_Parity", 0.2, Result.SAFE)])
+        self.assertFalse(AiAssessment.objects.exists())

@@ -40,8 +40,11 @@ def run_connector_sync(self, connector_name: str):
 def run_provider_analysis(self, case_id: int, kind: str, job_id: int):
     """Forwarder for mail AI jobs queued by the old provider slot before the upgrade: remove after
     the next release. ``job_id`` is the pk of the report-less ``provider-`` row the old code opened;
-    it runs as a deferred engine job, through the engine named by the row's analyzer, else ai_model."""
-    _run_deferred_job(self, job_id, fallback="ai_model")
+    it runs as a deferred job of ai_model."""
+    # Always ai_model, whatever the row's analyzer source: every provider- row came from the
+    # mail_ai slot, whose only implementer was ai_model (a Cortex-owned AI row must never reach
+    # Cortex's run, nor its breaker).
+    _run_deferred_job(self, job_id, engine="ai_model")
 
 
 @shared_task(bind=True, acks_late=True, reject_on_worker_lost=True, max_retries=2)
@@ -53,9 +56,9 @@ def run_engine_job(self, row_id: int):
     _run_deferred_job(self, row_id)
 
 
-def _run_deferred_job(task, row_id: int, fallback: str = "") -> None:
-    """The body of run_engine_job, shared with the forwarder. ``fallback`` names the engine used
-    when the row's source is not a registered analysis engine; with none, the row closes Failure."""
+def _run_deferred_job(task, row_id: int, engine: str = "") -> None:
+    """The body of run_engine_job, shared with the forwarder. ``engine`` overrides the row's
+    analyzer source; when it is not a registered analysis engine the row closes Failure."""
     from common.http_client import get_breaker
     from connectors.base import DATA_TYPE_MAIL_ARCHIVE, FETCH_RESULT, PROVIDER_KIND_ANALYSIS, FetchResult
     from connectors.engines import _external_job_id
@@ -69,13 +72,13 @@ def _run_deferred_job(task, row_id: int, fallback: str = "") -> None:
         return  # gone or closed already (redelivery, or fail_stale_jobs got there first)
     name, analyzer_name, case_id = row.analyzer.source, row.analyzer.name, row.case_id
     started = time.monotonic()
-    if fallback and name not in registry.providers(PROVIDER_KIND_ANALYSIS):
-        if fallback not in registry.providers(PROVIDER_KIND_ANALYSIS):
+    if engine:
+        name = engine
+        if name not in registry.providers(PROVIDER_KIND_ANALYSIS):
             _close_engine_job(row_id, name, analyzer_name, None,
                               FetchResult(FETCH_RESULT, "Failure", payload={"reason": "no engine for this job"}),
                               attempt=task.request.retries + 1, duration_ms=0)
             return
-        name = fallback
     result, error, connector = None, "engine returned no result", None
     try:
         connector = registry.instantiate(name)

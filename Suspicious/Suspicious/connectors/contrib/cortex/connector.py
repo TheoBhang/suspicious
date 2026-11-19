@@ -1,8 +1,6 @@
-"""Cortex connector: config, health and the analyzer catalogue sync.
-
-Step 1 of the analysis-engine work: ``enabled`` gates only the sync and the
-connector UI. Job starts, the webhook and reconcile still talk to Cortex
-directly whatever the flag says.
+"""Cortex connector: the first analysis engine (catalog, start, fetch, webhook),
+its health and the analyzer catalogue sync. ``enabled`` gates new job starts and
+the sync; jobs already started are still fetched and their webhook still accepted.
 """
 from __future__ import annotations
 
@@ -37,8 +35,8 @@ class CortexConnector(Connector):
         author="Thales CERT",
         category="Analysis",
         description=(
-            "Syncs the Cortex analyzer catalogue every minute. Job starts still go to "
-            "Cortex whatever the enabled flag says; gating them comes with the engine layer."
+            "Runs Cortex analyzers on new cases and syncs the Cortex analyzer catalogue every "
+            "minute. Disabling it stops all new Cortex analysis; jobs already started still finish."
         ),
         provides=PROVIDER_KIND_ANALYSIS,
         enabled_by_default=True,

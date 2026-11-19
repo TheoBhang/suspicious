@@ -228,6 +228,20 @@ DEFAULT_STALE_JOB_TIMEOUT_SECONDS = 7200
 _PENDING_REPORT = ("Waiting", "InProgress")
 
 
+def stale_timeout(name: str) -> int:
+    """The engine's ``stale_job_timeout_seconds``; 7200 when absent, unreadable or unregistered."""
+    if name not in registry.names():
+        return DEFAULT_STALE_JOB_TIMEOUT_SECONDS
+    from settings.config import get_section
+
+    try:
+        value = get_section(f"integrations.{name}").get("stale_job_timeout_seconds")
+        return int(value) if value not in (None, "") else DEFAULT_STALE_JOB_TIMEOUT_SECONDS
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Stale timeout of %s unreadable (%s): using the default", name, type(exc).__name__)
+        return DEFAULT_STALE_JOB_TIMEOUT_SECONDS
+
+
 def apply_result(report_instance, result: FetchResult) -> list[str]:
     """Set the result's status, and on Success its summary, taxonomies and full, on the
     report; returns the changed field names (not saved). CortexJobManager.update_report_instance."""

@@ -159,25 +159,26 @@ def materialise_dashboard_snapshots(self):
 
 @shared_task(bind=True, **_RETRY)
 def fail_stale_jobs(self):
-    """Auto-fail CaseAnalyzerJob rows pending beyond STALE_JOB_TIMEOUT.
+    """Auto-fail CaseAnalyzerJob rows pending beyond their engine's stale timeout.
 
-    Mirrors the existing AnalyzerReport stale-rescue but operates on the
-    ledger so per-case visibility is preserved even when AnalyzerReport
-    rows have been GC'd by delete_old_reports.
+    Each row waits for the ``stale_job_timeout_seconds`` of the connector owning its
+    analyzer (``Analyzer.source``), 7200 s when absent. Works on the ledger so per-case
+    visibility is preserved even when AnalyzerReport rows have been GC'd by delete_old_reports.
     """
     from datetime import timedelta
     from django.utils import timezone
+    from connectors.engines import stale_timeout
     from cortex_job.models import CaseAnalyzerJob
-    from cortex_job.cortex_utils.cortex_and_job_management import (
-        STALE_JOB_TIMEOUT_SECONDS,
-    )
 
     try:
-        cutoff = timezone.now() - timedelta(seconds=STALE_JOB_TIMEOUT_SECONDS)
-        n = CaseAnalyzerJob.objects.filter(
-            status__in=CaseAnalyzerJob.PENDING_STATUSES,
-            created_at__lt=cutoff,
-        ).update(status=CaseAnalyzerJob.STATUS_FAILURE, completed_at=timezone.now())
+        now = timezone.now()
+        pending = CaseAnalyzerJob.objects.filter(status__in=CaseAnalyzerJob.PENDING_STATUSES)
+        n = 0
+        for source in pending.values_list("analyzer__source", flat=True).distinct():
+            n += pending.filter(
+                analyzer__source=source,
+                created_at__lt=now - timedelta(seconds=stale_timeout(source)),
+            ).update(status=CaseAnalyzerJob.STATUS_FAILURE, completed_at=now)
         if n:
             logger.warning(
                 "fail_stale_jobs: marked %d CaseAnalyzerJob rows as Failure", n

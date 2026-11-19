@@ -183,9 +183,13 @@ class SyncCortexRunSyncNowTests(TestCase):
         from connectors.delivery import run_sync_now
         from connectors.registry import registry
         registry.discover()
+        # The connector is built from get_section, not load_config: pin its config so ambient
+        # settings (another test's SUSPICIOUS_CONFIG_PATH, a cached section) cannot make it a no-op.
+        section = {"url": "http://cortex:9001", "api_key": "k"}
         with patch("tasp.cron.sync_cortex.load_config", return_value=_fake_cron_config()), patch(
             "tasp.cron.sync_cortex._fetch_all_analyzers", side_effect=exc,
-        ):
+        ), patch("settings.config.get_section",
+                 side_effect=lambda n: dict(section) if n == "integrations.cortex" else {}):
             run_sync_now("cortex")
 
     def test_a_rejected_api_key_is_one_failed_row_and_no_retry(self):

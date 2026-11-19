@@ -2,7 +2,6 @@
 from types import SimpleNamespace
 from unittest import mock
 
-import pybreaker
 from django.contrib.auth import get_user_model
 from django.forms.models import model_to_dict
 from django.test import SimpleTestCase, TestCase

@@ -38,7 +38,6 @@ class AbsentAiAnalyzerTests(TestCase):
             self.assertEqual(CortexAnalyzerReports.exclude_ai_analyzer([keep, ai]), [keep])
 
     def test_sync_cortex_logs_nothing_for_the_absent_role(self):
-        from tasp.cron import sync_cortex
         from tasp.cron.sync_cortex import sync_cortex_analyzers
 
         remote = [{"id": i, "name": n} for i, n in

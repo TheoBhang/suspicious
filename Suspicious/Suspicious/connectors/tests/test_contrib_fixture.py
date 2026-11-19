@@ -50,8 +50,21 @@ class InertTest(SimpleTestCase):
         connector.config["confirm_fixture"] = True
         self.assertTrue(connector.catalog(name="Fixture_Yara_1_0"))
         self.assertTrue(connector.health_check().ok)
+        self.assertEqual(connector.health_check().detail, "fixture engine active (dev only)")
         del connector.config["confirm_fixture"]
         self.assert_inert(connector)
+
+
+class InertLoggingTest(SimpleTestCase):
+    def test_inert_catalog_warns_in_every_form(self):
+        for kwargs in ({}, {"data_type": "url"}, {"name": "Fixture_Yara_1_0"}):
+            with self.subTest(kwargs=kwargs), self.assertLogs("connectors.contrib.fixture.connector", "WARNING") as logs:
+                make().catalog(**kwargs)
+            self.assertEqual([r.getMessage() for r in logs.records], [INERT])
+
+    def test_confirmed_catalog_logs_nothing(self):
+        with self.assertNoLogs("connectors.contrib.fixture.connector"):
+            make(confirm_fixture=True).catalog(data_type="url")
 
 
 class ConfirmedTest(SimpleTestCase):

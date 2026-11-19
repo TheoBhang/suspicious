@@ -165,10 +165,10 @@ class FixtureUnconfirmedTest(FixturePipelineTest):
 
     def test_no_rows_and_the_case_finalises_unanalysed(self):
         case = self.url_case("http://good.example/")
-        self.dispatch(case)
+        with self.assertLogs("connectors.contrib.fixture.connector", "WARNING") as logs:
+            self.dispatch(case)
+        self.assertIn("fixture engine is inert", logs.output[0])
         self.assertEqual(self.jobs(case).count(), 0)
-        # dispatch logs nothing for an inert engine; the health check is where it shows
-        self.assertFalse(engines.registry.instantiate("fixture_engine").health_check().ok)
         self.assertFalse(AnalyzerReport.objects.filter(analyzer__source="fixture_engine").exists())
         case = self.reconcile(case)
         self.assertEqual(case.lifecycle_state, LifecycleState.FINALIZED)

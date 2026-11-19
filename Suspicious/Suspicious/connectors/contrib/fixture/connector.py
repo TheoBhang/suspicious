@@ -3,6 +3,7 @@ without Cortex. Never enable it in production: it scores anything it does not re
 so it stays inert until ``confirm_fixture`` is exactly True. No network, no database."""
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from connectors.base import (
@@ -18,6 +19,7 @@ from connectors.base import (
     StartResult,
 )
 
+logger = logging.getLogger(__name__)
 INERT = "fixture engine is inert: set confirm_fixture to true (never in production)"
 _MALICIOUS = ("malicious", "phish", "evil")
 _SUSPICIOUS = ("suspicious",)
@@ -57,10 +59,11 @@ class FixtureEngineConnector(Connector):
         return self.config.get("confirm_fixture") is True  # not "true", not 1
 
     def health_check(self) -> HealthStatus:
-        return HealthStatus(ok=True, detail="fixture engine active") if self._confirmed() else HealthStatus(ok=False, detail=INERT)
+        return HealthStatus(ok=True, detail="fixture engine active (dev only)") if self._confirmed() else HealthStatus(ok=False, detail=INERT)
 
     def catalog(self, data_type: str | None = None, name: str | None = None) -> list[CatalogEntry]:
         if not self._confirmed():
+            logger.warning(INERT)
             return []
         if name:
             return [e for e in _BY_NAME if e.name == name]

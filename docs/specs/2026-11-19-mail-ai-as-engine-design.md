@@ -89,9 +89,13 @@ The work has failed, even if it runs, when:
   (state `result`, a status, an optional `payload`). It may raise `ProviderUnavailable` (retryable
   or not).
 - **`FetchResult.payload: dict | None = None`.** Engine-specific data that is not a report body.
-- **`Connector.on_result(self, case, analyzer_name: str, result: FetchResult) -> None`.** Called
-  inside the transaction that stores a job result and closes its row (for any job, deferred or not),
-  after `store_result` (where there is a report). Default does nothing.
+- **`Connector.on_started(self, case, analyzer_name: str) -> None`.** Called by `dispatch` right
+  after it writes the ledger row of a deferred job, in the same transaction. Default does nothing.
+- **`Connector.on_result(self, case, analyzer_name: str, result: FetchResult) -> None`.** Called by
+  `run_engine_job` inside the transaction that stores a **deferred** job's outcome and closes its
+  row, for a success **and for a failure** (`result.status == "Failure"`, with the reason in
+  `payload["reason"]`). The other paths (`refresh`, the finished-at-start path) do not call it: no
+  engine needs it there yet. Default does nothing.
 - **`Connector.general_purpose: ClassVar[bool] = True`.** False for an engine that covers only part
   of the pipeline (the AI covers only `mail_archive`).
 
@@ -105,16 +109,27 @@ The work has failed, even if it runs, when:
   `run_engine_job(job_row_id)` on commit.
 - **`run_engine_job`** (replaces `run_provider_analysis`): skips when the row is no longer pending;
   runs `connector.run(...)` under that connector's breaker; retries only a retryable
-  `ProviderUnavailable` (same delays); on a result it claims the row, stores it
-  (`store_result` when the row has a report), calls `connector.on_result` in the same transaction,
-  writes the `ConnectorDelivery(event="analyze")` row, closes the row (`Success` or `Failure`) and
-  queues `reconcile_case` on commit. On failure it closes the row `Failure` and calls
-  `engines.mark_ai_missing(case)` unless the case already has an assessment (today's rule in
-  `finish_provider_analysis`).
-- **AI missing.** `dispatch` for `mail_archive` that starts no job (no enabled engine offers the
-  role, or every start was refused) calls `mark_ai_missing(case)`. `mark_ai_missing`,
-  `has_assessment` move from `connectors/providers.py` to `ai_model/mailinfo.py` and are imported
-  from there; `gsubmission`'s existing `mark_ai_missing` call keeps working.
+  `ProviderUnavailable` (same delays); then claims the row with the conditional UPDATE, calls
+  `connector.on_result` in the same transaction (for the final outcome: the result, or a
+  `Failure` built from the last error), writes the `ConnectorDelivery(event="analyze")` row (`success`
+  or `failed`, the error text on failure), closes the row (`Success` or `Failure`, `completed_at`)
+  and queues `reconcile_case` on commit. The engine layer knows nothing about the AI: all AI rules
+  live in the connector's hooks.
+- **A deferred job runs even if its connector was disabled after the start** (the engine rule: a
+  started job finishes), unlike today, where a disabled provider fails the row at once. One parity
+  test changes for this.
+- **AI missing, three places, all in `ai_model`.** (1) `ai_model.on_started` marks the AI missing
+  at registration unless the case already has an assessment (today's rule in
+  `queue_provider_analysis`), so a row closed by `fail_stale_jobs`, a lost enqueue or a dead worker
+  leaves `results_ai = Inconclusive`, never the model default "Suspicious". (2)
+  `ai_model.on_result` on a failure: AI missing unless an earlier assessment exists (today's rule in
+  `finish_provider_analysis`). (3) A new helper `ai_model.mailinfo.dispatch_mail_ai(case)` is what
+  `tasp.tasks.dispatch_case_analysis` and `gsubmission` call: it calls
+  `engines.dispatch(value=case, data_type="mail_archive", case=case)` and, when that starts no job
+  (no enabled engine offers the AI role, or every start was refused), calls `mark_ai_missing(case)`.
+  `mark_ai_missing` and `has_assessment` move from `connectors/providers.py` to
+  `ai_model/mailinfo.py`; `gsubmission`'s own `mark_ai_missing` call for a mail with no usable archive
+  stays.
 - The `provider-` ledger prefix is retired for new rows. Rows already open at upgrade keep it.
 
 ### The `ai_model` connector
@@ -125,18 +140,24 @@ The work has failed, even if it runs, when:
   `StartResult(job_id=<hex>, deferred=True)`.
 - `run(job_id, "mail_archive", case_id)` is today's `analyze` body: read the mail text, call the
   inference server, map the answer, include the shadow answer when a shadow exists. It returns a
-  `FetchResult` whose `status` is `Success` or `Failure` and whose `payload` carries what
-  `ProviderResult` carried (result, score, confidence, category, model version, assessment, shadow,
-  reason). A server refusal ("can't tell") is a `Success` with an INCONCLUSIVE payload, exactly as
-  now.
-- `on_result` is today's `finish_provider_analysis` write, moved: the case's AI fields, `AiAssessment`
-  (all fields reset to defaults then the result's, as now), `apply_mail_info`, the shadow store in its
-  own savepoint. A payload with no model version counts as a failure, as now.
+  `FetchResult` whose `payload` carries what `ProviderResult` carried (result, score, confidence,
+  category, model version, assessment, shadow, reason). **Its `status` follows today's outcome
+  exactly:** a normal server answer (it has a model version) is `Success` even when the class is
+  INCONCLUSIVE; no archive, an unreadable archive, a server refusal ("can't tell") and an answer
+  with no model version are `Failure` with the reason in the payload, because today
+  `finish_provider_analysis` treats a result without a model version as a failure (row `Failure`,
+  delivery `failed`, AI missing unless an earlier assessment exists).
+- `on_result` is today's `finish_provider_analysis` write, moved: on `Success`, the case's AI
+  fields, `AiAssessment` (all fields reset to defaults then the result's, as now), `apply_mail_info`,
+  the shadow store in its own savepoint; on `Failure`, the AI-missing rule above and a warning in the
+  log with the reason.
 
 ### Guard and statuses
 
 - The last-engine guard counts another enabled `analysis` connector only if it is not inert **and**
   `general_purpose`. Disabling Cortex while only `ai_model` is enabled therefore needs `force`.
+  The guard applies only when the connector being disabled is itself `general_purpose`: disabling
+  `ai_model` never needs `force` (it analyses nothing general, so it is never "the last engine").
 - `enabled_engines()` is unchanged; `ai_model` appears in it and dispatches only the `mail_archive`
   type because it offers nothing else.
 - The one-enabled-per-kind check in `ConnectorStateView` is deleted with the `mail_ai` kind.
@@ -144,7 +165,7 @@ The work has failed, even if it runs, when:
 ### Callers
 
 `tasp.tasks.dispatch_case_analysis` and `gsubmission` replace `queue_mail_ai(case)` with
-`engines.dispatch(value=case, data_type="mail_archive", case=case)`. The intent label
+`ai_model.mailinfo.dispatch_mail_ai(case)` (see "AI missing" above). The intent label
 `AI_ARCHIVE_INTENT` is kept (it is serialised into queued tasks).
 
 ### Upgrade
@@ -164,9 +185,11 @@ The work has failed, even if it runs, when:
   unreadable archive, no archive, server down (retried twice, then AI missing), non-retryable error,
   shadow answer, redelivery after close, an earlier assessment kept when a later job fails.
 - **No engine offers the AI role:** the case is marked AI missing and finalises as today.
+- **A row that never completes:** a deferred AI row closed by `fail_stale_jobs` (or whose enqueue was
+  lost) leaves `results_ai = Inconclusive`, not the model default.
 - **Both engines:** Cortex and `ai_model` enabled, a mail case gets rows from both and waits for
-  both; Cortex disabled and `ai_model` enabled, disabling the last general-purpose engine returns
-  409.
+  both; with `ai_model` the only other enabled analysis connector, disabling Cortex returns 409
+  unless forced; disabling `ai_model` never returns 409.
 - **Upgrade:** a pre-upgrade `provider-` row closed by the forwarding task produces the same case
   fields.
 - Full backend suite (only the two known `google.api_core` errors); `backtest_scoring` identical.
@@ -185,3 +208,10 @@ validated; the order of tasks in the plan.
 - `general_purpose` as a class flag, not a manifest field, so third-party connectors need no change.
 - The old task name stays for exactly one release.
 - Delivery rows keep the event name `analyze`.
+- `on_result` and `on_started` are called for deferred jobs only; the other paths do not call them
+  until an engine needs it.
+- A deferred job finishes even when its connector was disabled after the start (the engine rule),
+  which changes today's "disabled provider fails at once" for the AI and one parity test.
+- Disabling `ai_model` never needs `force`.
+- All AI rules (marking the AI missing, the case-field write) live in `ai_model`; the engine layer
+  stays AI-free.

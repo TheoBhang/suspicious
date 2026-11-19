@@ -209,8 +209,8 @@ def _start(connector, name, entry, value, data_type, data_value, case) -> str | 
             if store_result(analyzer_report, finished):
                 status = analyzer_report.status
             else:  # left as the placeholder: refresh or the stale timeout handles the row
-                logger.warning("Engine %s result for %s is %r, expected %r: not stored",
-                               name, entry.name, finished.data_type, data_type)
+                logger.warning("Engine %s finished start for %s not stored (state %r, data type %r, expected %r)",
+                               name, entry.name, finished.state, finished.data_type, data_type)
                 finished = None
         CaseAnalyzerJob.objects.create(
             case=case,
@@ -272,6 +272,8 @@ def store_result(report, result: FetchResult) -> bool:
     nothing written, when the result's data type is set and differs from the report's
     (mail_body matches file). A Success with no body keeps the status; a Failure carries
     no body (Cortex sends errorMessage) and is written, so only Success needs one."""
+    if result.state != FETCH_RESULT:
+        return False
     data_type = report.type
     if result.data_type and result.data_type != data_type and not (
         data_type == "mail_body" and result.data_type == "file"

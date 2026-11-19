@@ -16,6 +16,7 @@ from connectors.base import (
     Connector,
     ConnectorManifest,
     FETCH_RESULT,
+    FETCH_UNKNOWN,
     FetchResult,
     HealthStatus,
     StartResult,
@@ -354,6 +355,12 @@ class FinishedStartRulesTest(TestCase):
         self.assertEqual(caj.status, "Success")
         self.assertIsNotNone(caj.completed_at)
         score.assert_called_once()
+
+    def test_non_result_finished_start_writes_nothing(self):
+        score, report, caj = self.start(FetchResult(FETCH_UNKNOWN))
+        self.assertEqual((report.status, report.report_summary), ("InProgress", {"ongoing": "analysis"}))
+        self.assertEqual(caj.status, CaseAnalyzerJob.STATUS_INPROGRESS)
+        score.assert_not_called()
 
     def test_success_without_body_stays_pending_and_scores(self):
         score, report, caj = self.start(self.result())

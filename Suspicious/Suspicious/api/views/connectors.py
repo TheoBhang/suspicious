@@ -48,12 +48,24 @@ def _required_field_filled(name: str, field, section: dict) -> bool:
     return bool(_dotted_get(section, field.key))
 
 
+def _is_inert(name: str) -> bool:
+    """Whether the connector's instance says it cannot work yet; an instance that fails to
+    build counts as inert. Never calls health_check (it may do network I/O)."""
+    try:
+        return registry.instantiate(name).is_inert()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("connector %s could not be instantiated: %s", name, type(exc).__name__)
+        return True
+
+
 def _compute_status(name: str, config_schema, enabled: bool, section: dict) -> str:
     """Disabled/partial/connected: mirrors Watcher's own connector status
     logic. No 'disconnected' state: Watcher's badge config defines one but
     its _compute_status never returns it."""
     if not enabled:
         return "disabled"
+    if _is_inert(name):
+        return "partial"
     required = [f for f in config_schema if f.required]
     if not required:
         return "connected"
@@ -137,7 +149,7 @@ class ConnectorStateView(APIView):
                 and kind == PROVIDER_KIND_ANALYSIS
                 and get_state(name).enabled
                 and not any(
-                    get_state(other).enabled
+                    get_state(other).enabled and not _is_inert(other)
                     for other in registry.providers(kind) if other != name
                 )
             ):

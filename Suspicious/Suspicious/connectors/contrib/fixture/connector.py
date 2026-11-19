@@ -58,6 +58,9 @@ class FixtureEngineConnector(Connector):
     def _confirmed(self) -> bool:
         return self.config.get("confirm_fixture") is True  # not "true", not 1
 
+    def is_inert(self) -> bool:
+        return not self._confirmed()
+
     def health_check(self) -> HealthStatus:
         return HealthStatus(ok=True, detail="fixture engine active (dev only)") if self._confirmed() else HealthStatus(ok=False, detail=INERT)
 

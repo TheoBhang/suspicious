@@ -186,6 +186,8 @@ FETCH_RESULT = "result"
 FETCH_GONE = "gone"
 FETCH_UNKNOWN = "unknown"
 
+DATA_TYPE_MAIL_ARCHIVE = "mail_archive"
+
 
 @dataclass(frozen=True)
 class CatalogEntry:
@@ -204,12 +206,14 @@ class FetchResult:
     summary: dict | None = None
     full: dict | None = None
     data_type: str = ""  # the engine's own dataType for the job, as reported
+    payload: dict | None = None  # engine-specific result handed to on_result
 
 
 @dataclass(frozen=True)
 class StartResult:
     job_id: str
     finished: FetchResult | None = None
+    deferred: bool = False  # the job runs later via Connector.run, not at start
 
 
 class Connector(ABC):
@@ -217,6 +221,7 @@ class Connector(ABC):
     implement ``health_check`` plus whichever hooks they subscribe to."""
 
     manifest: ClassVar[ConnectorManifest]
+    general_purpose: ClassVar[bool] = True
 
     def __init__(self, config: dict):
         self.config = config
@@ -263,3 +268,13 @@ class Connector(ABC):
         """Job ids announced; None means rejected as unauthenticated. Raises WebhookNotConfigured
         when the connector has no webhook secret at all."""
         raise NotImplementedError
+
+    def run(self, job_id: str, data_type: str, value: str) -> FetchResult:  # pragma: no cover
+        """Execute a deferred job (see StartResult.deferred)."""
+        raise NotImplementedError
+
+    def on_started(self, case, analyzer_name: str) -> None:
+        """Called after a job of this engine is started for ``case``. Does nothing by default."""
+
+    def on_result(self, case, analyzer_name: str, result: FetchResult) -> None:
+        """Called when a job of this engine reaches a result for ``case``. Does nothing by default."""

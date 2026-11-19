@@ -64,8 +64,6 @@ def _compute_status(name: str, config_schema, enabled: bool, section: dict) -> s
     its _compute_status never returns it."""
     if not enabled:
         return "disabled"
-    if _is_inert(name):
-        return "partial"
     required = [f for f in config_schema if f.required]
     if not required:
         return "connected"
@@ -90,7 +88,8 @@ def _serialize_connector(name: str) -> dict:
         "config_schema": [asdict(f) for f in manifest.config_schema],
         "enabled": state.enabled,
         "enabled_by_default": manifest.enabled_by_default,
-        "status": _compute_status(name, manifest.config_schema, state.enabled, section),
+        "status": "partial" if state.enabled and _is_inert(name)
+        else _compute_status(name, manifest.config_schema, state.enabled, section),
         "last_health_ok": state.last_health_ok,
         "last_health_detail": state.last_health_detail,
         "last_health_at": state.last_health_at,

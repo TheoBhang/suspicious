@@ -150,9 +150,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It cannot replay a campaign the connector built. It holds the campaign's member row locks for the
   whole replay, so a replay on the newest campaign can make live detection retry briefly: run it
   off-peak or expect retries. See `docs/components/analyzers.md`.
-- Which connector provides `mail_ai` is set by enabling it in the connector settings. Only one may
-  be enabled, and `PATCH /api/connectors/<name>/` answers 409 when another provider is already
-  enabled.
 
 ### Removed
 
@@ -178,6 +175,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connector's ledger row and the AI vote's weight use (without the key the name is
   `AI_Mail_Analyzer`). The Cortex analyzer sync no longer reports that role as missing from Cortex
   and leaves its row active.
+  `integrations.cortex.analyzers.ai` must name the AI vote's analyzer only, never a Cortex analyzer
+  you run for other jobs: the `ai_model` connector adopts the analyzer row of that name (and the
+  Cortex catalogue sync skips it), so Cortex would stop dispatching that analyzer.
 - The inference server's `public` model variant. No route classified with it: the server no longer
   loads or hot-reloads `models_public/`, `/health` lists only the `personal` variant, and
   `ai_inference` no longer mounts `models_public/`.

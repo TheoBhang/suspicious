@@ -149,8 +149,8 @@ A connector whose manifest sets `provides = "analysis"` is an analysis
 engine: the case pipeline (`connectors/engines.py`) asks it for analyzers
 and starts jobs on it. Built-in engines are `cortex`, `ai_model` and the
 dev-only `fixture_engine`; several may be enabled at once. An engine never
-touches the database itself: the engine layer writes the `Analyzer`,
-`AnalyzerReport` and `CaseAnalyzerJob` rows. The contract
+writes the ledger rows itself: the engine layer owns the `Analyzer`,
+`AnalyzerReport` and `CaseAnalyzerJob` rows (hooks may write their own models). The contract
 (`connectors/base.py`):
 
 | Method | Returns |

@@ -275,6 +275,13 @@ class DispatchTest(TestCase):
         self.assertFalse(CaseAnalyzerJob.objects.exists())
         self.assertFalse(ConnectorDelivery.objects.exists())
 
+    def test_no_engine_enabled_logs_one_warning_without_the_value(self):
+        self.only()
+        with self.assertLogs("connectors.engines", "DEBUG") as logs:
+            engines.dispatch(self.url, "url", self.case)
+        self.assertEqual(logs.output, [
+            f"WARNING:connectors.engines:no analysis engine enabled; url on case {self.case.id} not analysed"])
+
     def test_name_owned_by_another_source_is_skipped(self):
         self.only("fake_a")
         Analyzer.objects.create(name="VT", analyzer_cortex_id="vt1", source="cortex")

@@ -48,6 +48,11 @@ class CatalogTest(SimpleTestCase):
             api.return_value.analyzers.get_by_name.side_effect = NotFoundError("x")
             self.assertEqual(conn().catalog(name="nope"), [])
 
+    def test_unoffered_role_is_empty_without_an_error_log(self):
+        with mock.patch(API) as api, self.assertNoLogs("connectors.contrib.cortex.connector", "WARNING"):
+            api.return_value.analyzers.get_by_name.return_value = None
+            self.assertEqual(conn().catalog(name="nope"), [])
+
     def test_unfiltered_lists_the_whole_catalogue(self):
         remote = mock.Mock(id="i1")
         remote.name = "A1"
@@ -150,6 +155,11 @@ class FetchTest(SimpleTestCase):
         self.assertEqual((out.summary, out.full), (None, {"a": 1}))
         out = self._fetch(job, SimpleNamespace(report={"summary": {"a": 1}}))
         self.assertEqual((out.summary, out.full), ({"a": 1}, None))
+
+    def test_non_dict_report_body_is_tolerated(self):
+        job = SimpleNamespace(status="InProgress", dataType="url")
+        out = self._fetch(job, SimpleNamespace(report=["x"]))
+        self.assertEqual(out, FetchResult("result", "InProgress", None, None, "url"))
 
     def test_gone(self):
         with mock.patch(API) as api:

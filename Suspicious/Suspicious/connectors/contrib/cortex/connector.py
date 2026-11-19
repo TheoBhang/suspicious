@@ -135,7 +135,7 @@ class CortexConnector(Connector):
         try:
             api = self._api()
             found = api.analyzers.get_by_name(name) if name else api.analyzers.get_by_type(data_type)
-            found = [found] if name else found
+            found = [found] if name and found else found  # None: a role Cortex does not offer
             return [
                 CatalogEntry(a.id, a.name, tuple(getattr(a, "dataTypeList", None) or ()))
                 for a in found or []
@@ -215,6 +215,8 @@ class CortexConnector(Connector):
             report = getattr(_report(api), "report", None) or {}
         except Exception as exc:  # noqa: BLE001
             logger.warning("No report for job %s: %s", job_id, type(exc).__name__)
+            report = {}
+        if not isinstance(report, dict):
             report = {}
         return FetchResult(
             FETCH_RESULT, job.status, report.get("summary"), report.get("full"),

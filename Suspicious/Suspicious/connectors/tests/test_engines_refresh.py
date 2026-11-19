@@ -129,6 +129,34 @@ class RefreshTest(EngineTestBase):
         self.assertEqual(FakeEngine.fetched, ["j1"])
         score.assert_not_called()
 
+    def test_non_analysis_source_with_a_report_is_skipped(self):
+        class Plain(Connector):
+            manifest = ConnectorManifest(name="plain", version="0.0.1")
+
+            def health_check(self):
+                return HealthStatus(ok=True)
+
+        self.registry.register(Plain)
+        self.analyzer.source = "plain"
+        self.analyzer.save()
+        caj = self.row()
+        caj, report = self.refresh(caj)  # must not raise
+        self.assertEqual((report.status, caj.status), ("InProgress", "InProgress"))
+        self.assertEqual(FakeEngine.fetched, [])
+
+    def test_a_failing_fetch_leaves_the_row_and_does_not_raise(self):
+        caj = self.row()
+        with mock.patch.object(FakeEngine, "fetch", side_effect=NotImplementedError):
+            caj, report = self.refresh(caj)
+        self.assertEqual((report.status, caj.status), ("InProgress", "InProgress"))
+
+    def test_null_stale_timeout_falls_back_to_7200(self):
+        caj = self.row(age=3000)  # past 600s but inside 7200s
+        self.answer("j1", FETCH_RESULT, "InProgress", None, None, data_type="url")
+        with mock.patch.dict(CONFIGS, {"integrations.fake": {"stale_job_timeout_seconds": None}}):
+            caj, report = self.refresh(caj)
+        self.assertEqual(report.status, "InProgress")
+
     def test_gone_sets_deleted(self):
         caj = self.row()
         self.answer("j1", FETCH_GONE)

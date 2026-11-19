@@ -103,6 +103,7 @@ def _roles() -> dict:
 def _dispatch(value, data_type, case, job_ids) -> None:
     names = enabled_engines()
     if not names:
+        logger.warning("no analysis engine enabled; %s on case %s not analysed", data_type, case.id)
         return
 
     from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
@@ -347,13 +348,18 @@ def refresh(caj, cache: dict | None = None) -> None:
     if name not in registry.names():
         logger.warning("No engine %r registered for job %s: not refreshed", name, caj.cortex_job_id)
         return
-    engine = registry.instantiate(name)
+    if name not in registry.providers(PROVIDER_KIND_ANALYSIS):
+        logger.debug("Row %s: source %r provides no analysis: not refreshed", caj.cortex_job_id, name)
+        return
     cache = {} if cache is None else cache
-    fetched = cache.get(caj.cortex_job_id)
-    if fetched is None:
-        fetched = cache[caj.cortex_job_id] = engine.fetch(_external_job_id(name, caj.cortex_job_id))
-    stale_timeout = int(engine.config.get("stale_job_timeout_seconds", DEFAULT_STALE_JOB_TIMEOUT_SECONDS))
-    close_row(caj, update_report(report, fetched, stale_timeout))
+    try:
+        fetched = cache.get(caj.cortex_job_id)
+        if fetched is None:
+            engine = registry.instantiate(name)
+            fetched = cache[caj.cortex_job_id] = engine.fetch(_external_job_id(name, caj.cortex_job_id))
+        close_row(caj, update_report(report, fetched, stale_timeout(name)))
+    except Exception as exc:  # noqa: BLE001: one bad row must not stall the reconcile pass
+        logger.error("Refresh of job %s failed: %s", caj.cortex_job_id, type(exc).__name__)
 
 
 def close_row(caj, new_status) -> None:

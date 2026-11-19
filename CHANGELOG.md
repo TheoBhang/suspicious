@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Log lines about job fetch, stale job rescue and analysis dispatch moved from the
   `tasp.cron.update_ongoing_case_jobs` and `tasp.cron.fetch_and_process_emails` loggers to the
   `connectors` logger, so operators grepping `update_cases.log` must look in the connectors log.
+- **The mail AI verdict is an `ai_model` analysis-engine job; the `mail_ai` provider slot is
+  removed.** Jobs queued before the upgrade still finish: the old task
+  `connectors.tasks.run_provider_analysis` stays one release as a forwarder that runs the
+  `provider-` row through the engine path. `ai_model` keeps its name, config and enabled state.
+  Disabling `ai_model` no longer needs `force` (it is not a general-purpose engine). With Cortex
+  enabled, each mail now triggers one extra Cortex catalogue lookup for the AI analyzer name. Log
+  lines of the AI job ("mail AI provider failed", shadow store) moved from the `connectors.delivery`
+  logger to `connectors.contrib.ai_model`. A third-party connector that sets `provides="mail_ai"` no
+  longer loads (listed in the connector load errors); `Connector.analyze` is no longer called:
+  implement the `analysis` engine contract (`catalog`, `start`, `run`, `on_started`, `on_result`).
 
 ### Added
 

@@ -277,4 +277,7 @@ class Connector(ABC):
         """Called after a job of this engine is started for ``case``. Does nothing by default."""
 
     def on_result(self, case, analyzer_name: str, result: FetchResult) -> None:
-        """Called when a job of this engine reaches a result for ``case``. Does nothing by default."""
+        """Called when a job of this engine reaches a result for ``case``. Does nothing by default.
+        A job closed without a result (stale rescue, a lost enqueue, a dead worker, an instantiation
+        failure) never reaches on_result: a deferred engine must put its 'no result' state in
+        on_started."""

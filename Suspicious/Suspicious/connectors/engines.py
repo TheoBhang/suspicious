@@ -60,7 +60,9 @@ def select_analyzers(data_type: str, value, offered: list[CatalogEntry], roles: 
                 raise TypeError("file must have 'file_path.name' attribute")
             if value.file_path.name.endswith(".eml"):
                 keep -= _role_names(roles, EML_EXCLUDED_ROLES)
-        return [entry for entry in offered if entry.name in keep]
+        # mail_archive is no observable: only an analyzer that declares it may run on it.
+        return [entry for entry in offered if entry.name in keep
+                and (data_type != DATA_TYPE_MAIL_ARCHIVE or data_type in entry.data_types)]
     excluded = _role_names(roles, GENERIC_EXCLUDED_ROLES)
     return [entry for entry in offered if entry.name not in excluded]
 
@@ -145,7 +147,10 @@ def _dispatch_engine(name, value, data_type, data_value, case, roles, job_ids) -
         offered = connector.catalog(data_type=data_type)
 
     for entry in select_analyzers(data_type, value, offered, roles):
-        if Analyzer.objects.filter(name=entry.name).exclude(source=name).exists():
+        owners = Analyzer.objects.filter(name=entry.name).exclude(source=name)
+        if name != "cortex":  # a row of the old provider path is adopted by _analyzer_row
+            owners = owners.exclude(analyzer_cortex_id__startswith=PROVIDER_ANALYZER_PREFIX)
+        if owners.exists():
             logger.error("Engine %s offers analyzer %r, owned by another source: skipped", name, entry.name)
             continue
         try:
@@ -155,6 +160,25 @@ def _dispatch_engine(name, value, data_type, data_value, case, roles, job_ids) -
             continue
         if job_id:
             job_ids.append(job_id)
+
+
+PROVIDER_ANALYZER_PREFIX = "provider:"  # Analyzer rows created by the old provider path
+
+
+def _analyzer_row(name, entry, analyzer_id):
+    """The engine's Analyzer row. Cortex: by its raw id, as run_analyzer did. Any other engine:
+    by name first, adopting a row of the old provider path; created only when none has the name."""
+    from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
+    from cortex_job.models import Analyzer
+
+    if name != "cortex":
+        row = Analyzer.objects.filter(name=entry.name).first()
+        if row is not None:
+            if row.source != name and row.analyzer_cortex_id.startswith(PROVIDER_ANALYZER_PREFIX):
+                row.source = name
+                row.save(update_fields=["source"])
+            return row
+    return CortexJob.get_analyzer_db(dataclasses.replace(entry, id=analyzer_id), source=name)
 
 
 def _failed_start(name, case, analyzer_name, reason) -> None:
@@ -199,7 +223,7 @@ def _start(connector, name, entry, value, data_type, data_value, case) -> str | 
         return job_id
 
     with transaction.atomic():
-        analyzer_db = CortexJob.get_analyzer_db(dataclasses.replace(entry, id=analyzer_id), source=name)
+        analyzer_db = _analyzer_row(name, entry, analyzer_id)
         analyzer_report = AnalyzerReport(
             cortex_job_id=job_id,
             type=data_type,
@@ -238,11 +262,10 @@ def _start(connector, name, entry, value, data_type, data_value, case) -> str | 
 def _start_deferred(connector, name, entry, analyzer_id, job_id, case) -> None:
     """A deferred job: a pending row with no report, closed by run_engine_job in a worker."""
     from connectors.tasks import run_engine_job
-    from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
     from cortex_job.models import CaseAnalyzerJob
 
     with transaction.atomic():
-        analyzer_db = CortexJob.get_analyzer_db(dataclasses.replace(entry, id=analyzer_id), source=name)
+        analyzer_db = _analyzer_row(name, entry, analyzer_id)
         row = CaseAnalyzerJob.objects.create(
             case=case, cortex_job_id=job_id, analyzer=analyzer_db,
             analyzer_report=None, status=CaseAnalyzerJob.STATUS_INPROGRESS,

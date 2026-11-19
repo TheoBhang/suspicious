@@ -31,6 +31,7 @@ from cortex_job.models import Analyzer, AnalyzerReport, CaseAnalyzerJob
 
 ROLES = {"yara": "Yara", "header": "Header", "ai": "MailAI"}
 CONFIGS = {"integrations.cortex": {"analyzers": ROLES}}
+ANALYZER_LOG = "tasp.cron.fetch_and_process_emails"  # get_analyzer_db's logger, not propagated
 SUCCESS = FetchResult(FETCH_RESULT, "Success", payload={"verdict": "x"})
 
 
@@ -76,11 +77,20 @@ class Deferred(Connector):
             raise type(self).result_error
 
 
+class UrlOnly(Deferred):
+    manifest = ConnectorManifest(name="urlonly", version="0.0.1", provides=PROVIDER_KIND_ANALYSIS)
+    offered = [CatalogEntry("mail_classifier", "MailAI", ("url",))]
+
+
 class SelectMailArchiveTest(SimpleTestCase):
     def test_only_the_ai_role_is_selected(self):
         offered = [CatalogEntry("a", n, (DATA_TYPE_MAIL_ARCHIVE,)) for n in ("Yara", "MailAI", "Other")]
         selected = engines.select_analyzers(DATA_TYPE_MAIL_ARCHIVE, None, offered, ROLES)
         self.assertEqual([x.name for x in selected], ["MailAI"])
+
+    def test_an_ai_named_analyzer_without_mail_archive_is_not_selected(self):
+        offered = [CatalogEntry("a", "MailAI", ("url",))]
+        self.assertEqual(engines.select_analyzers(DATA_TYPE_MAIL_ARCHIVE, None, offered, ROLES), [])
 
     def test_get_data_value_is_the_case_id(self):
         self.assertEqual(CortexJob.get_data_value(SimpleNamespace(id=42), DATA_TYPE_MAIL_ARCHIVE), "42")
@@ -93,6 +103,7 @@ class DeferredTest(TestCase):
         self.addCleanup(patcher.stop)
         self.registry = ConnectorRegistry()
         self.registry.register(Deferred)
+        self.registry.register(UrlOnly)
         for target in ("connectors.engines.registry", "connectors.delivery.registry",
                        "connectors.dispatch.registry", "connectors.registry.registry"):
             patcher = mock.patch(target, self.registry)
@@ -155,6 +166,34 @@ class DeferredTest(TestCase):
         self.assertNotIn("secret text", "\n".join(logs.output))
         self.assertEqual(CaseAnalyzerJob.objects.get().status, CaseAnalyzerJob.STATUS_INPROGRESS)
         self.delay.assert_called_once()
+
+    def test_an_engine_not_declaring_mail_archive_is_not_started(self):
+        ConnectorState.objects.update(enabled=False)
+        ConnectorState.objects.create(name="urlonly", enabled=True)
+        self.assertEqual(self.dispatch(), [])
+        self.assertEqual(self.calls("start"), [])
+        self.assertFalse(CaseAnalyzerJob.objects.exists())
+
+    def test_an_old_provider_row_is_adopted_without_warning(self):
+        Analyzer.objects.create(name="MailAI", analyzer_cortex_id="provider:MailAI", source="cortex")
+        with self.assertNoLogs(level="WARNING"), self.assertNoLogs(ANALYZER_LOG, "WARNING"):
+            self.assertEqual(self.dispatch(), ["deferred-job1"])
+        analyzer = Analyzer.objects.get()
+        self.assertEqual((analyzer.source, analyzer.analyzer_cortex_id), ("deferred", "provider:MailAI"))
+        self.assertEqual(CaseAnalyzerJob.objects.get().analyzer, analyzer)
+
+    def test_an_own_row_with_another_id_is_reused_without_warning(self):
+        Analyzer.objects.create(name="MailAI", analyzer_cortex_id="deferred:old", source="deferred")
+        with self.assertNoLogs(level="WARNING"), self.assertNoLogs(ANALYZER_LOG, "WARNING"):
+            self.assertEqual(self.dispatch(), ["deferred-job1"])
+        self.assertEqual(CaseAnalyzerJob.objects.get().analyzer, Analyzer.objects.get())
+
+    def test_a_cortex_row_with_a_real_id_is_still_skipped(self):
+        Analyzer.objects.create(name="MailAI", analyzer_cortex_id="abc123", source="cortex")
+        with self.assertLogs("connectors.engines", "ERROR"):
+            self.assertEqual(self.dispatch(), [])
+        self.assertEqual(self.calls("start"), [])
+        self.assertEqual(Analyzer.objects.get().source, "cortex")
 
     # ── run_engine_job ──────────────────────────────────────────────────────
 

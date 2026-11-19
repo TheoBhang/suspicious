@@ -143,12 +143,16 @@ class ConnectorStateView(APIView):
             ):
                 return Response({"detail": f"{name} already provides {kind}"},
                                 status=status.HTTP_409_CONFLICT)
+            # Only a general-purpose engine (Cortex) can be the last one; a partial engine
+            # (ai_model: mail_archive only) is never guarded and never counts as a fallback.
             if (
                 not enabled
                 and kind == PROVIDER_KIND_ANALYSIS
+                and registry.get(name).general_purpose
                 and get_state(name).enabled
                 and not any(
-                    get_state(other).enabled and not _is_inert(other)
+                    get_state(other).enabled and registry.get(other).general_purpose
+                    and not _is_inert(other)
                     for other in registry.providers(kind) if other != name
                 )
             ):

@@ -129,7 +129,7 @@ def _close_engine_job(row_id, name, analyzer_name, connector, result, *, attempt
     from tasp.tasks import reconcile_case
 
     success = result.status == "Success"
-    error = "" if success else str((result.payload or {}).get("reason") or "")
+    error = str((result.payload or {}).get("reason") or "")
     with transaction.atomic():
         # The conditional UPDATE claims the row: a redelivered or racing run finds nothing to close.
         claimed = CaseAnalyzerJob.objects.filter(

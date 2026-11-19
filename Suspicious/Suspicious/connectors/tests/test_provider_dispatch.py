@@ -165,11 +165,8 @@ class ProviderDispatchTest(TestCase):
             CaseAnalyzerJob.objects.exclude(cortex_job_id__startswith=PROVIDER_JOB_PREFIX).exists()
         )
 
-    def test_an_ai_archive_dispatch_hands_over_and_calls_no_cortex_api(self):
-        self.dispatch_ai_archive()
-        self.assertTrue(has_provider_job(self.case))
-        self.run_task(CaseAnalyzerJob.objects.get())
-        self.assertEqual(self.case.results_ai, "Dangerous")
+    # test_an_ai_archive_dispatch_hands_over_and_calls_no_cortex_api: dispatch_case_analysis now
+    # hands the mail to the engine path; ported as test_engine_path.EndToEndParityTest.
 
     def test_an_ai_archive_dispatch_without_a_provider_queues_nothing(self):
         ConnectorState.objects.filter(name="dummy_provider").update(enabled=False)

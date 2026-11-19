@@ -48,6 +48,7 @@ def queue_provider_analysis(case, kind: str):
     None when no provider is enabled."""
     if enabled_provider(kind) is None:
         return None
+    from ai_model.mailinfo import has_assessment, mark_ai_missing
     from connectors.tasks import run_provider_analysis
     from cortex_job.cortex_utils.cortex_and_job_management import ai_analyzer_name
     from cortex_job.migrations._tier_seed import tier_for
@@ -75,25 +76,10 @@ def queue_provider_analysis(case, kind: str):
     return job
 
 
-def has_assessment(case) -> bool:
-    """True when an earlier provider row for the case succeeded (its AiAssessment is stored)."""
-    from ai_model.models import AiAssessment
-
-    return AiAssessment.objects.filter(case=case).exclude(model_version="").exists()
-
-
-def mark_ai_missing(case) -> None:
-    """No AI result will come: what the Cortex path wrote when its AI job failed or never ran,
-    so scoring treats the AI vote as missing (``ai_missing``) instead of the "Suspicious" default."""
-    from case_handler.models import Result
-
-    case.results_ai = Result.INCONCLUSIVE
-    case.save(update_fields=["results_ai"])
-
-
 def queue_mail_ai(case):
     """Hand a mail with a readable archive to the mail_ai provider; with none enabled, mark the
     AI missing. Returns the ledger row or None."""
+    from ai_model.mailinfo import mark_ai_missing
     from connectors.base import PROVIDER_KIND_MAIL_AI
 
     job = queue_provider_analysis(case, PROVIDER_KIND_MAIL_AI)
@@ -110,7 +96,7 @@ def finish_provider_analysis(job_id: int, result, *, error: str = "", attempt: i
     A result without a model_version (the provider's "no answer": unreadable mail, a refusal) is
     a failure. A failure keeps the case's assessment and AI fields from an earlier successful row
     of the case, else leaves the AI missing (Inconclusive)."""
-    from ai_model.mailinfo import apply_mail_info
+    from ai_model.mailinfo import apply_mail_info, has_assessment
     from ai_model.models import AiAssessment
     from case_handler.models import Case, Result
     from connectors.models import ConnectorDelivery

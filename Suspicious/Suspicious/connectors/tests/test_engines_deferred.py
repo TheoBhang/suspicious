@@ -209,6 +209,12 @@ class DeferredTest(TestCase):
                          ("deferred", "analyze", "success", "", self.case.id, 1))
         self.reconcile.delay.assert_called_once_with(self.case.id)
 
+    def test_a_success_delivery_carries_the_payload_reason(self):
+        Deferred.result = FetchResult(FETCH_RESULT, "Success", payload={"reason": "a note"})
+        self.run_task(self.started_row())
+        delivery = ConnectorDelivery.objects.get()
+        self.assertEqual((delivery.status, delivery.error), ("success", "a note"))
+
     def test_failure_result_fails_the_row(self):
         Deferred.result = FetchResult(FETCH_RESULT, "Failure", payload={"reason": "no archive"})
         row = self.run_task(self.started_row())

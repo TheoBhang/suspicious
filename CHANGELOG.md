@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this release its enabled flag only gated the analyzer sync; it now gates every new Cortex job, so a
   Cortex connector switched off earlier stops all new Cortex analysis after the upgrade. The webhook
   URL (`/api/cortex/webhook/`) and its secret are unchanged.
+- Log lines about job fetch, stale job rescue and analysis dispatch moved from the
+  `tasp.cron.update_ongoing_case_jobs` and `tasp.cron.fetch_and_process_emails` loggers to the
+  `connectors` logger, so operators grepping `update_cases.log` must look in the connectors log.
 
 ### Added
 

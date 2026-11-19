@@ -69,6 +69,10 @@ Unconfigured, it reports not ok and the sync does nothing. Disabling the cortex 
 all new Cortex analysis. Disabling the last enabled `analysis` connector needs
 `"force": true` on `PATCH /api/connectors/<name>/` (otherwise 409, code `last_analysis_connector`).
 
+A Cortex outage shows in the connector health, the `cortex` breaker state and the logs, but not as
+failed-start deliveries: the catalogue lookup fails quietly, so nothing reaches `start`. Failed-start
+rows appear for intermittent errors, auth failures and similar.
+
 - **Upgrade:** before upgrading, check that Settings > Connectors shows Cortex **enabled**. Until
   this release the flag only gated the analyzer sync, so a Cortex connector switched off then now
   stops all new Cortex analysis. The webhook URL and secret are unchanged.

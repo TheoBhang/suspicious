@@ -77,6 +77,85 @@ def run_provider_analysis(self, case_id: int, kind: str, job_id: int):
     finish_provider_analysis(job_id, None, error=error, **ledger)
 
 
+@shared_task(bind=True, acks_late=True, reject_on_worker_lost=True, max_retries=2)
+def run_engine_job(self, row_id: int):
+    """Run one deferred engine job (StartResult.deferred) and close its ledger row.
+    Only a retryable ProviderUnavailable is retried; anything else (an open breaker,
+    an error, a result that is not one) closes the row as Failure at once. A connector
+    disabled since the start still runs: a started job finishes."""
+    from common.http_client import get_breaker
+    from connectors.base import DATA_TYPE_MAIL_ARCHIVE, FETCH_RESULT, FetchResult
+    from connectors.engines import _external_job_id
+    from connectors.providers import ProviderUnavailable
+    from connectors.registry import registry
+    from cortex_job.models import CaseAnalyzerJob
+
+    row = (CaseAnalyzerJob.objects.select_related("analyzer")
+           .filter(pk=row_id, status__in=CaseAnalyzerJob.PENDING_STATUSES).first())
+    if row is None:
+        return  # gone or closed already (redelivery, or fail_stale_jobs got there first)
+    name, analyzer_name, case_id = row.analyzer.source, row.analyzer.name, row.case_id
+    started = time.monotonic()
+    result, error, connector = None, "engine returned no result", None
+    try:
+        connector = registry.instantiate(name)
+        with get_breaker(name).calling():
+            # Every deferred job is a mail_archive job in this release; its value is the case id.
+            result = connector.run(_external_job_id(name, row.cortex_job_id),
+                                   DATA_TYPE_MAIL_ARCHIVE, str(case_id))
+    except ProviderUnavailable as exc:
+        if exc.retryable and self.request.retries < self.max_retries:
+            raise self.retry(
+                exc=exc, countdown=5 * 2 ** self.request.retries + random.uniform(0, 3)
+            )
+        error = str(exc)
+    except Exception as exc:  # noqa: BLE001 — connector code is untrusted
+        error = f"{type(exc).__name__}: {exc}"
+    if result is not None and (result.state != FETCH_RESULT or result.status not in ("Success", "Failure")):
+        error, result = f"not a result (state {result.state!r}, status {result.status!r})", None
+    if result is None:
+        result = FetchResult(FETCH_RESULT, "Failure", payload={"reason": error})
+    _close_engine_job(row_id, name, analyzer_name, connector, result, attempt=self.request.retries + 1,
+                      duration_ms=int((time.monotonic() - started) * 1000))
+
+
+def _close_engine_job(row_id, name, analyzer_name, connector, result, *, attempt, duration_ms) -> None:
+    from django.db import transaction
+    from django.utils import timezone
+
+    from case_handler.models import Case
+    from connectors.models import ConnectorDelivery
+    from cortex_job.models import CaseAnalyzerJob
+    from tasp.tasks import reconcile_case
+
+    success = result.status == "Success"
+    error = "" if success else str((result.payload or {}).get("reason") or "")
+    with transaction.atomic():
+        # The conditional UPDATE claims the row: a redelivered or racing run finds nothing to close.
+        claimed = CaseAnalyzerJob.objects.filter(
+            pk=row_id, status__in=CaseAnalyzerJob.PENDING_STATUSES
+        ).update(status=CaseAnalyzerJob.STATUS_SUCCESS if success else CaseAnalyzerJob.STATUS_FAILURE,
+                 completed_at=timezone.now())
+        if not claimed:
+            return
+        case = Case.objects.get(analyzer_jobs__pk=row_id)
+        if connector is not None:  # None only when the connector could not be built
+            try:
+                with transaction.atomic():  # a savepoint: a failing hook leaves nothing half-written
+                    connector.on_result(case, analyzer_name, result)
+            except Exception as exc:  # noqa: BLE001: the class name only, a message may carry data
+                logger.error("Engine %s on_result for case %s failed: %s", name, case.id, type(exc).__name__)
+                error = f"could not store the result: {type(exc).__name__}"
+                success = False
+                CaseAnalyzerJob.objects.filter(pk=row_id).update(status=CaseAnalyzerJob.STATUS_FAILURE)
+        ConnectorDelivery.objects.create(
+            connector=name, event="analyze", case_id=case.id,
+            status=ConnectorDelivery.STATUS_SUCCESS if success else ConnectorDelivery.STATUS_FAILED,
+            error=error[:5000], attempt=attempt, duration_ms=duration_ms,
+        )
+        transaction.on_commit(lambda: reconcile_case.delay(case.id))
+
+
 _mismatch_warned = False
 
 

@@ -14,6 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from connectors.base import (
+    DATA_TYPE_MAIL_ARCHIVE,
     FETCH_GONE,
     FETCH_RESULT,
     PROVIDER_KIND_ANALYSIS,
@@ -32,6 +33,7 @@ ROLE_TYPES = {
     "file": ("yara", "file_info", "sandbox"),
     "mail_body": ("yara",),
     "mail_header": ("header",),
+    DATA_TYPE_MAIL_ARCHIVE: ("ai",),
 }
 EML_EXCLUDED_ROLES = ("ai", "yara", "sandbox", "header")
 GENERIC_EXCLUDED_ROLES = ("yara", "sandbox", "header")
@@ -90,14 +92,18 @@ def dispatch(value, data_type: str, case) -> list[str]:
 
 
 def _roles() -> dict:
-    """integrations.cortex.analyzers; empty (logged) when the config cannot be read."""
+    """integrations.cortex.analyzers; empty (logged) when the config cannot be read. The ``ai``
+    role always has a name: ai_analyzer_name() supplies its default."""
+    from cortex_job.cortex_utils.cortex_and_job_management import ai_analyzer_name
     from settings.config import get_section
 
     try:
-        return get_section("integrations.cortex").get("analyzers") or {}
+        roles = dict(get_section("integrations.cortex").get("analyzers") or {})
     except Exception as exc:  # noqa: BLE001
         logger.error("Could not load cortex analyzer roles: %s", exc)
-        return {}
+        roles = {}
+    roles["ai"] = ai_analyzer_name()
+    return roles
 
 
 def _dispatch(value, data_type, case, job_ids) -> None:
@@ -188,6 +194,10 @@ def _start(connector, name, entry, value, data_type, data_value, case) -> str | 
         _failed_start(name, case, entry.name, "job id too long")
         return None
 
+    if started.deferred:
+        _start_deferred(connector, name, entry, analyzer_id, job_id, case)
+        return job_id
+
     with transaction.atomic():
         analyzer_db = CortexJob.get_analyzer_db(dataclasses.replace(entry, id=analyzer_id), source=name)
         analyzer_report = AnalyzerReport(
@@ -223,6 +233,26 @@ def _start(connector, name, entry, value, data_type, data_value, case) -> str | 
     if finished and finished.status == "Success":
         _score(analyzer_report)
     return job_id
+
+
+def _start_deferred(connector, name, entry, analyzer_id, job_id, case) -> None:
+    """A deferred job: a pending row with no report, closed by run_engine_job in a worker."""
+    from connectors.tasks import run_engine_job
+    from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
+    from cortex_job.models import CaseAnalyzerJob
+
+    with transaction.atomic():
+        analyzer_db = CortexJob.get_analyzer_db(dataclasses.replace(entry, id=analyzer_id), source=name)
+        row = CaseAnalyzerJob.objects.create(
+            case=case, cortex_job_id=job_id, analyzer=analyzer_db,
+            analyzer_report=None, status=CaseAnalyzerJob.STATUS_INPROGRESS,
+        )
+        try:
+            with transaction.atomic():  # a savepoint: a failing hook never undoes the row
+                connector.on_started(case, entry.name)
+        except Exception as exc:  # noqa: BLE001: the class name only, a message may carry data
+            logger.error("Engine %s on_started for %s failed: %s", name, entry.name, type(exc).__name__)
+        transaction.on_commit(lambda: run_engine_job.delay(row.id))
 
 
 # ── refresh: reconcile reads job results through the engine ────────────────

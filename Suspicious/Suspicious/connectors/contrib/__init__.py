@@ -12,4 +12,6 @@ BUILTIN_CONNECTOR_PATHS: tuple[str, ...] = (
     "connectors.contrib.elastic_siem.connector:ElasticSiemConnector",
     "connectors.contrib.xsoar.connector:XsoarConnector",
     "connectors.contrib.ai_model.connector:AiModelConnector",
+    "connectors.contrib.cortex.connector:CortexConnector",
+    "connectors.contrib.fixture.connector:FixtureEngineConnector",
 )

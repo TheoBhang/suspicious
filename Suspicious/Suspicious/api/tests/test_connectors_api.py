@@ -215,3 +215,175 @@ class ConnectorsApiTest(APITestCase):
         response = self.client.get("/api/connectors/dummy/deliveries/?limit=2")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["results"]), 2)
+
+
+def _analysis_connector(name):
+    from connectors.base import Connector, ConnectorManifest, HealthStatus, PROVIDER_KIND_ANALYSIS
+
+    return type(
+        f"Analysis_{name}",
+        (Connector,),
+        {"manifest": ConnectorManifest(
+            name=name, version="0.0.1", description="analysis fixture",
+            provides=PROVIDER_KIND_ANALYSIS,
+        ), "health_check": lambda self: HealthStatus(ok=True)},
+    )
+
+
+class AnalysisGuardTests(APITestCase):
+    def setUp(self):
+        self.registry = ConnectorRegistry()
+        self.registry.register(_analysis_connector("eng_a"))
+        self.registry.register(_analysis_connector("eng_b"))
+        self.registry.register(DummyConnector)
+        for target in ("api.views.connectors.registry", "connectors.delivery.registry"):
+            patcher = mock.patch(target, self.registry)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        user = get_user_model().objects.create_user(username="admin", password="x")
+        user.groups.add(Group.objects.get_or_create(name="Admin")[0])
+        self.client.force_authenticate(user)
+        ConnectorState.objects.create(name="eng_a", enabled=True)
+        ConnectorState.objects.create(name="eng_b", enabled=False)
+
+    def _patch(self, name, body):
+        return self.client.patch(f"/api/connectors/{name}/", body, format="json")
+
+    def _enabled(self, name):
+        return ConnectorState.objects.get(name=name).enabled
+
+    def test_disabling_the_only_enabled_analysis_connector_is_409(self):
+        response = self._patch("eng_a", {"enabled": False})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "last_analysis_connector")
+        self.assertEqual(response.json()["detail"], (
+            "eng_a is the last enabled analysis connector. Disabling it stops all new "
+            "analysis from that connector: new cases get no analysis until an analysis "
+            "connector is enabled. Disable it anyway?"))
+        self.assertTrue(self._enabled("eng_a"))
+
+    def test_force_true_disables_it(self):
+        response = self._patch("eng_a", {"enabled": False, "force": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self._enabled("eng_a"))
+
+    def test_disabling_one_of_two_needs_no_force(self):
+        ConnectorState.objects.filter(name="eng_b").update(enabled=True)
+        self.assertEqual(self._patch("eng_a", {"enabled": False}).status_code, 200)
+
+    def test_force_must_be_boolean_true(self):
+        for bad in ("false", 1, "true"):
+            response = self._patch("eng_a", {"enabled": False, "force": bad})
+            self.assertEqual(response.status_code, 409, bad)
+        self.assertTrue(self._enabled("eng_a"))
+
+    def test_disabling_an_already_disabled_connector_is_a_noop(self):
+        self.assertEqual(self._patch("eng_b", {"enabled": False}).status_code, 200)
+
+    def test_enabling_an_analysis_connector_ignores_force_and_the_kind_cap(self):
+        response = self._patch("eng_b", {"enabled": True, "force": False})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self._enabled("eng_b"))
+
+    def test_a_plain_connector_is_never_guarded(self):
+        ConnectorState.objects.create(name="dummy", enabled=True)
+        self.assertEqual(self._patch("dummy", {"enabled": False}).status_code, 200)
+
+
+class InertEngineGuardTests(APITestCase):
+    """An enabled but unconfirmed fixture engine analyses nothing, so it is not a fallback."""
+
+    def setUp(self):
+        from connectors.contrib.fixture.connector import FixtureEngineConnector
+
+        self.registry = ConnectorRegistry()
+        self.registry.register(_analysis_connector("eng_a"))
+        self.registry.register(FixtureEngineConnector)
+        for target in ("api.views.connectors.registry", "connectors.delivery.registry"):
+            patcher = mock.patch(target, self.registry)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        user = get_user_model().objects.create_user(username="admin", password="x")
+        user.groups.add(Group.objects.get_or_create(name="Admin")[0])
+        self.client.force_authenticate(user)
+        ConnectorState.objects.create(name="eng_a", enabled=True)
+        ConnectorState.objects.create(name="fixture_engine", enabled=True)
+
+    def _confirm(self, value):
+        patcher = mock.patch("settings.config.get_section", return_value={"confirm_fixture": value})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_unconfirmed_fixture_does_not_count(self):
+        self._confirm(False)
+        response = self.client.patch("/api/connectors/eng_a/", {"enabled": False}, format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "last_analysis_connector")
+
+    def test_confirmed_fixture_counts(self):
+        self._confirm(True)
+        response = self.client.patch("/api/connectors/eng_a/", {"enabled": False}, format="json")
+        self.assertEqual(response.status_code, 200)
+
+    def test_enabled_unconfirmed_fixture_status_is_partial(self):
+        self._confirm(False)
+        items = {c["name"]: c for c in self.client.get("/api/connectors/").json()["connectors"]}
+        self.assertEqual(items["fixture_engine"]["status"], "partial")
+        self.assertEqual(items["eng_a"]["status"], "connected")
+
+
+class MailAiEngineGuardTests(APITestCase):
+    """ai_model is an analysis connector that covers only mail_archive: it is never the fallback
+    for a general-purpose engine, and disabling it never needs force."""
+
+    def setUp(self):
+        from connectors.contrib.ai_model.connector import AiModelConnector
+
+        self.registry = ConnectorRegistry()
+        self.registry.register(_analysis_connector("cortex"))
+        self.registry.register(_analysis_connector("eng_b"))
+        self.registry.register(AiModelConnector)
+        for target in ("api.views.connectors.registry", "connectors.delivery.registry"):
+            patcher = mock.patch(target, self.registry)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        user = get_user_model().objects.create_user(username="admin", password="x")
+        user.groups.add(Group.objects.get_or_create(name="Admin")[0])
+        self.client.force_authenticate(user)
+        ConnectorState.objects.create(name="cortex", enabled=True)
+        ConnectorState.objects.create(name="eng_b", enabled=False)
+        ConnectorState.objects.create(name="ai_model", enabled=True)
+
+    def _patch(self, name, body):
+        return self.client.patch(f"/api/connectors/{name}/", body, format="json")
+
+    def _enabled(self, name):
+        return ConnectorState.objects.get(name=name).enabled
+
+    def test_disabling_cortex_with_only_ai_model_left_is_409(self):
+        response = self._patch("cortex", {"enabled": False})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "last_analysis_connector")
+        self.assertTrue(self._enabled("cortex"))
+
+    def test_disabling_cortex_with_only_ai_model_left_is_fine_when_forced(self):
+        self.assertEqual(self._patch("cortex", {"enabled": False, "force": True}).status_code, 200)
+        self.assertFalse(self._enabled("cortex"))
+        self.assertTrue(self._enabled("ai_model"))
+
+    def test_disabling_cortex_with_another_general_engine_needs_no_force(self):
+        ConnectorState.objects.filter(name="eng_b").update(enabled=True)
+        self.assertEqual(self._patch("cortex", {"enabled": False}).status_code, 200)
+
+    def test_disabling_ai_model_needs_no_force(self):
+        self.assertEqual(self._patch("ai_model", {"enabled": False}).status_code, 200)
+        self.assertFalse(self._enabled("ai_model"))
+
+    def test_disabling_ai_model_alone_needs_no_force(self):
+        ConnectorState.objects.filter(name="cortex").update(enabled=False)
+        self.assertEqual(self._patch("ai_model", {"enabled": False}).status_code, 200)
+
+    def test_enabling_ai_model_beside_cortex_is_fine(self):
+        ConnectorState.objects.filter(name="ai_model").update(enabled=False)
+        self.assertEqual(self._patch("ai_model", {"enabled": True}).status_code, 200)
+        self.assertTrue(self._enabled("ai_model"))

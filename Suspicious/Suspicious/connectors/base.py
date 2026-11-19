@@ -19,10 +19,10 @@ VALID_EVENTS = frozenset({
     EVENT_CASE_CREATED, EVENT_CASE_FINALISED, EVENT_CASE_MODIFIED, EVENT_CAMPAIGN_UPDATED,
 })
 
-# Analysis-provider slots: a connector whose manifest sets ``provides`` to one of
-# these kinds supplies that analysis (see Connector.analyze). One enabled per kind.
-PROVIDER_KIND_MAIL_AI = "mail_ai"
-VALID_PROVIDER_KINDS = frozenset({PROVIDER_KIND_MAIL_AI})
+# A connector whose manifest sets ``provides`` to "analysis" is an analysis engine (Cortex
+# first; see Connector.catalog/start/fetch/run). Several may be enabled at once.
+PROVIDER_KIND_ANALYSIS = "analysis"
+VALID_PROVIDER_KINDS = frozenset({PROVIDER_KIND_ANALYSIS})
 
 FIELD_TYPES = frozenset({"str", "int", "bool", "url", "secret"})
 
@@ -97,6 +97,10 @@ class HealthStatus:
     detail: str = ""
 
 
+class WebhookNotConfigured(Exception):
+    """The connector has no webhook secret: its webhook cannot authenticate anyone."""
+
+
 @dataclass(frozen=True)
 class ConnectorManifest:
     name: str
@@ -109,7 +113,7 @@ class ConnectorManifest:
     events: tuple[str, ...] = ()
     schedules: tuple[Schedule, ...] = ()
     enabled_by_default: bool = False
-    provides: str = ""  # analysis-provider kind, or "" for a plain connector
+    provides: str = ""  # "analysis" for an analysis engine, "" for a plain connector
 
     def validate(self) -> None:
         if not _SLUG_RE.match(self.name):
@@ -133,19 +137,6 @@ class ConnectorManifest:
                 raise ValueError(
                     f"schedule {schedule.name!r} interval must be > 0 seconds"
                 )
-
-
-@dataclass(frozen=True)
-class ProviderResult:
-    """What an analysis provider returns from ``Connector.analyze``."""
-    result: str            # SAFE | UNWANTED | DANGEROUS | INCONCLUSIVE
-    score: float           # as Case.score_ai stores it (already rounded)
-    confidence: float      # percent, as Case.confidence_ai stores it
-    category: str          # as Case.category_ai stores it
-    model_version: str
-    assessment: dict       # remaining AiAssessment fields; keys are the model's field names
-    reason: str = ""       # why, when result is INCONCLUSIVE
-    shadow: dict | None = None  # the shadow model's answer, stored beside the case, never scored
 
 
 @dataclass(frozen=True)
@@ -176,11 +167,46 @@ class CaseEvent:
         return cls(**data)
 
 
+FETCH_RESULT = "result"
+FETCH_GONE = "gone"
+FETCH_UNKNOWN = "unknown"
+
+DATA_TYPE_MAIL_ARCHIVE = "mail_archive"
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    """One analyzer an analysis engine offers."""
+    id: str
+    name: str
+    data_types: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    """A job lookup. ``status`` (Waiting|InProgress|Success|Failure) is set
+    when ``state`` is FETCH_RESULT."""
+    state: str
+    status: str = ""
+    summary: dict | None = None
+    full: dict | None = None
+    data_type: str = ""  # the engine's own dataType for the job, as reported
+    payload: dict | None = None  # engine-specific result handed to on_result
+
+
+@dataclass(frozen=True)
+class StartResult:
+    job_id: str
+    finished: FetchResult | None = None
+    deferred: bool = False  # the job runs later via Connector.run, not at start
+
+
 class Connector(ABC):
     """Base class for all connectors. Subclasses set ``manifest`` and
     implement ``health_check`` plus whichever hooks they subscribe to."""
 
     manifest: ClassVar[ConnectorManifest]
+    general_purpose: ClassVar[bool] = True
 
     def __init__(self, config: dict):
         self.config = config
@@ -188,6 +214,10 @@ class Connector(ABC):
     @abstractmethod
     def health_check(self) -> HealthStatus:
         """Cheap connectivity/auth probe. Must not raise — return ok=False."""
+
+    def is_inert(self) -> bool:
+        """True when the connector is enabled but cannot analyse anything until configured further."""
+        return False
 
     def on_case_created(self, event: CaseEvent) -> None:  # pragma: no cover
         raise NotImplementedError
@@ -204,7 +234,30 @@ class Connector(ABC):
     def sync(self) -> None:  # pragma: no cover
         raise NotImplementedError
 
-    def analyze(self, kind: str, case_id: int) -> ProviderResult:  # pragma: no cover
-        """Analysis-provider hook: implemented by connectors whose manifest
-        ``provides`` the given kind."""
+    def catalog(self, data_type: str | None = None, name: str | None = None) -> list[CatalogEntry]:  # pragma: no cover
         raise NotImplementedError
+
+    def start(self, analyzer: CatalogEntry, data_type: str, value: str) -> StartResult | None:  # pragma: no cover
+        """None means the engine refused the job."""
+        raise NotImplementedError
+
+    def fetch(self, job_id: str) -> FetchResult:  # pragma: no cover
+        raise NotImplementedError
+
+    def webhook(self, headers: dict, payload: dict) -> list[str] | None:  # pragma: no cover
+        """Job ids announced; None means rejected as unauthenticated. Raises WebhookNotConfigured
+        when the connector has no webhook secret at all."""
+        raise NotImplementedError
+
+    def run(self, job_id: str, data_type: str, value: str) -> FetchResult:  # pragma: no cover
+        """Execute a deferred job (see StartResult.deferred)."""
+        raise NotImplementedError
+
+    def on_started(self, case, analyzer_name: str) -> None:
+        """Called after a job of this engine is started for ``case``. Does nothing by default."""
+
+    def on_result(self, case, analyzer_name: str, result: FetchResult) -> None:
+        """Called when a job of this engine reaches a result for ``case``. Does nothing by default.
+        A job closed without a result (stale rescue, a lost enqueue, a dead worker, an instantiation
+        failure) never reaches on_result: a deferred engine must put its 'no result' state in
+        on_started."""

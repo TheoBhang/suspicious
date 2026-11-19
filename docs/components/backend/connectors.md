@@ -1,23 +1,195 @@
 # connectors
 
 Plugin framework every integration with an external system is built on. The
-ten built-in connectors are `thehive`, `misp`, `watcher`, `smtp_notify`,
-`chromadb`, `ai_narration`, `case_search`, `elastic_siem`, `xsoar` and
-`ai_model`. The framework provides registry, event dispatch, retry + circuit breaker, and a
+eleven built-in connectors are `thehive`, `misp`, `watcher`, `smtp_notify`,
+`chromadb`, `ai_narration`, `case_search`, `elastic_siem`, `xsoar`,
+`ai_model` and `cortex`. The framework provides registry, event dispatch, retry + circuit breaker, and a
 `ConnectorDelivery` audit ledger.
 
 See [`Suspicious/Suspicious/connectors/README.md`](https://github.com/thalesgroup-cert/suspicious/blob/main/Suspicious/Suspicious/connectors/README.md)
 for the framework internals and the built-in connector table, and
 [Connectors (author guide)](../../connectors.md) for writing a new one.
 
+## Analysis engines
+
+A connector whose manifest sets `provides="analysis"` is an analysis engine. `connectors/engines.py`
+is the only code the pipeline calls to start analyzer jobs and read their results; Cortex is the
+first engine. An engine implements four operations and never touches the database:
+
+| Operation | Returns |
+|---|---|
+| `catalog(data_type=None, name=None)` | the analyzers it offers (`CatalogEntry`: id, name, data types) |
+| `start(analyzer, data_type, value)` | a `StartResult` (external job id, and optionally a finished result), or `None` for a routine refusal |
+| `fetch(job_id)` | a `FetchResult` in one of three states, below |
+| `webhook(headers, payload)` (optional) | the job ids an authenticated callback announces; `None` when the caller is not authenticated |
+
+`fetch` has three outcomes. **result**: a status (`Waiting`, `InProgress`, `Success`, `Failure`)
+and, on success, `summary` (with `taxonomies`) and `full`, stored and scored as Cortex reports
+always were. **gone**: the engine says the job no longer exists; the row becomes `Deleted`.
+**unknown**: the engine could not be reached (network error, open breaker); the row is left alone
+and a later pass retries. An engine must never answer "gone" for a job it merely could not reach.
+
+- **One engine or many.** Any number of `analysis` connectors may be enabled; `analysis` is the
+  only `provides` kind (the `mail_ai` provider slot and its one-per-kind rule are gone).
+  `engines.dispatch` asks every enabled engine for its
+  catalogue and starts the analyzers the selection policy picks (roles from
+  `integrations.cortex.analyzers.*`, whichever engine offers the name), so one case can hold rows
+  from several engines and reconcile waits until all of them are closed. With none enabled,
+  dispatch writes no rows and the case finalises as "no analyzer applicable". A **disabled**
+  engine starts nothing, but its pending rows are still fetched, so a case in flight completes.
+- **Name ownership.** `Analyzer.source` names the connector that owns the row; `Analyzer.name`
+  stays unique. An engine offering a name another source owns is skipped (logged) by both the
+  catalogue sync and dispatch, and the sync deactivates only its own rows. Two exceptions: the
+  catalogue sync never creates or claims the row named like the AI role
+  (`integrations.cortex.analyzers.ai`), and at dispatch a non-Cortex engine's entry that declares
+  `mail_archive` adopts an existing row of its name from any source (source set to the engine, id kept), as
+  does any entry for a row of the old provider path (`provider:` id). Cortex keeps its raw
+  ids; any other engine stores `<connector>:<id>` in `analyzer_cortex_id` and `<connector>-<id>`
+  in `cortex_job_id`.
+- **Webhook.** `POST /api/connectors/<name>/webhook/` is the generic route: the engine
+  authenticates the call itself, announced job ids are deduplicated in cache and the owning cases
+  are reconciled. `/api/cortex/webhook/` forwards to it, so Cortex's webhook URL and secret are
+  unchanged. A disabled engine's webhook is still accepted.
+- **Stale jobs.** `fail_stale_jobs` fails a pending row once it is older than its own engine's
+  `stale_job_timeout_seconds` (7200 when absent or when the engine is no longer registered).
+- **Delivery ledger.** A `ConnectorDelivery` row (event `start`) is written for each **failed**
+  start only, with the analyzer name and the exception class. A successful start is recorded by its
+  `CaseAnalyzerJob`; a refusal (the engine declined the input) is a log line, and fetches are not
+  recorded.
+- **General-purpose engines.** `Connector.general_purpose` (default `True`) marks an engine that
+  can analyse any observable. Only a general-purpose engine counts for the "last enabled analysis
+  connector" guard: disabling it without another enabled, configured general-purpose engine needs
+  `force: true` (409 `last_analysis_connector`). A partial engine (`general_purpose = False`, such
+  as `ai_model`) is never guarded and never counts as a fallback.
+
+### Deferred jobs
+
+An engine whose work runs inside Suspicious rather than on a remote service (today `ai_model`)
+answers `start` with `StartResult(job_id, deferred=True)`. Three more hooks complete the contract:
+
+| Hook | Called |
+|---|---|
+| `run(job_id, data_type, value)` | in a Celery worker by `connectors.tasks.run_engine_job`; returns a `FetchResult` in state `result` whose `payload` carries the engine's own result |
+| `on_started(case, analyzer_name)` | right after the deferred row is written, in its own savepoint; the place for the case's "no result yet" state |
+| `on_result(case, analyzer_name, result)` | when `run` gave a result, inside the transaction that closes the row, in a savepoint |
+
+`engines.dispatch` writes a pending `CaseAnalyzerJob` row with no `AnalyzerReport` (id
+`<connector>-<job id>`), calls `on_started` and queues `run_engine_job` on commit. The task runs
+`run` under the engine's circuit breaker; a retryable `ProviderUnavailable` is retried twice
+(5 s, then 10 s, each plus up to 3 s of jitter), anything else closes the row as `Failure` at once. A conditional
+UPDATE claims the row, so a redelivered task closes nothing twice. It then calls `on_result`,
+writes a `ConnectorDelivery` row (event `analyze`, `success` or `failed`, the payload's `reason`
+in `error`) and queues reconcile. An engine disabled after the start still runs its started jobs.
+A row closed without a result (`fail_stale_jobs`, a lost enqueue, a dead worker, an engine that
+cannot be built) never reaches `on_result`. `refresh` skips report-less rows: only their task
+closes them, so a deferred engine needs no `fetch`.
+
+The `mail_archive` data type is the case's mail archive; its value is the case id. It is no
+observable: only an analyzer whose `CatalogEntry.data_types` declares `mail_archive` and whose
+name is the AI role (`integrations.cortex.analyzers.ai`, default `AI_Mail_Analyzer`) is started
+on it. Every deferred job of this release is a `mail_archive` job.
+
+Rows opened before the upgrade by the retired `mail_ai` provider slot (`provider-<hex>` ids, no
+report) still finish: the old Celery task `connectors.tasks.run_provider_analysis` stays for one
+release as a forwarder into the same code as `run_engine_job`, always through `ai_model` (the
+slot's only implementer), whatever the row's analyzer source; with `ai_model` not registered the
+row closes `Failure` ("no engine for this job").
+
+## cortex
+
+Category Analysis, provides `analysis`, enabled by default. Config is the existing
+`integrations.cortex` section (`url`, `api_key`, `webhook_secret`, `stale_job_timeout_seconds`,
+`analyzers.*`), so `settings.json` needs no change. The connector starts, fetches and announces
+Cortex jobs through the engine layer above, syncs the analyzer catalogue
+into the `Analyzer` table every 60 s (the old `sync-cortex` beat entry is gone; the `sync_cortex`
+task forwards to it) and reports health from `GET <url>/api/analyzer` with the API key, so a rejected key shows
+as not ok. The health detail also lists configured `analyzers.*` roles Cortex does not offer,
+the inactive analyzer count, jobs pending over 30 minutes and the age of the last webhook (an
+early sign of a broken callback). A failed sync is a failed delivery and is retried, except a
+rejected API key, which waits for an operator. The
+webhook reads `webhook_secret` from the connector config, so an edit applies without a restart.
+Unconfigured, it reports not ok and the sync does nothing. Disabling the cortex connector stops
+all new Cortex analysis. Disabling the last enabled `analysis` connector needs
+`"force": true` on `PATCH /api/connectors/<name>/` (otherwise 409, code `last_analysis_connector`).
+
+A Cortex outage shows in the connector health, the `cortex` breaker state and the logs, but not as
+failed-start deliveries: the catalogue lookup fails quietly, so nothing reaches `start`. Failed-start
+rows appear for intermittent errors, auth failures and similar.
+
+- **Upgrade:** before upgrading, check that Settings > Connectors shows Cortex **enabled**. Until
+  this release the flag only gated the analyzer sync, so a Cortex connector switched off then now
+  stops all new Cortex analysis. The webhook URL and secret are unchanged.
+- On upgrade, disable any old Cortex-side `AI_Mail_Analyzer` analyzer in Cortex. Otherwise the sync logs an ERROR about it every minute, because the row now belongs to the `ai_model` connector.
+- `/api/cortex/webhook/` reads its secret through the runtime config layer (Vault-backed, cached 60 s) instead of only at boot, and falls back to `CORTEX_WEBHOOK_SECRET` when that config cannot be read.
+
+## fixture_engine
+
+Category Analysis, provides `analysis`, off by default. A fake engine for tests and dev stacks: it
+answers instantly from the analysed value itself, with no network and no database. **Never enable
+it in production.**
+
+- **Inert until `confirm_fixture` is exactly the boolean `true`.** While it is not, `catalog`
+  offers nothing, `start` does nothing, the health check reports it inert and every catalog call
+  logs one warning. Enabling the connector in Settings alone does nothing. Why: an enabled fixture
+  engine would mark everything it does not recognise as safe.
+- **Verdict markers.** A case-insensitive substring of the string the engine receives:
+  `malicious`, `phish`, `evil` give malicious; `suspicious` gives suspicious; anything else is
+  safe; the most severe marker wins. For a file that string is `/tmp/<temporary name>` as dispatch
+  passes it, not the original file name. For a mail body the engine only sees that path, never the
+  body text. The hash row of an attachment always scores safe (no marker can match a hash).
+- **Analyzers offered.** By data type (url, domain, ip, hash, mail): `Fixture_Reputation_1_0`.
+  By name only (role analyzers): `Fixture_Yara_1_0` (file, mail_body), `Fixture_FileInfo_1_0`
+  (file), `Fixture_Sandbox_1_0` (file), `Fixture_Header_1_0` (mail_header).
+- **Blast radius if confirmed beside Cortex in production.**
+  - On the IOC-group road (`score_observable`) its analyzers are tier 3, so a fixture "safe"
+    cannot override a real tier-1 or tier-2 malicious, and a lone tier-3 malicious is capped at
+    Suspicious.
+  - On the single URL, file and mail roads (`score_case`, which ignores tier) every fixture "safe"
+    report adds to the number of scored reports and so raises the bar for Dangerous, which needs at
+    least `max(1, scored // 3)` malicious reports. Example: 5 real reports with 1 malicious is
+    Dangerous; adding 3 fixture safe reports makes 8 scored and needs 2, so the case can fall to a
+    lower band. A lone fixture "malicious" on that road turns a case Dangerous, so any production
+    URL containing `phish` or `evil` would be flagged.
+- **Leftovers.** After you unconfirm or disable the engine, its `Fixture_*` `Analyzer` rows keep
+  weight 0.2 and `is_active` true, and are never deactivated. The analyzer weight guard counts
+  active rows that have reports of a kind, so on a database where the fixture engine once ran,
+  setting the last real analyzer of a kind to weight 0 can pass the guard. Never run the fixture
+  engine on a database you keep (or delete its `Fixture_*` analyzers first).
+- Every stored report is visibly fake: analyzer names start with `Fixture_`, and the confirmed
+  health detail says "dev only".
+
+### Running without Cortex (dev)
+
+1. In Settings > Connectors, enable `fixture_engine` and set `confirm_fixture` to true.
+2. Disable `cortex`. The last-engine guard counts the fixture engine only while it is enabled
+   AND confirmed, so with step 1 done cortex is not the last analysis connector and no
+   confirmation is asked. An enabled but unconfirmed fixture tile shows as "partial" and does not
+   count.
+3. Set the `integrations.cortex.analyzers` roles to `yara=Fixture_Yara_1_0`,
+   `file_info=Fixture_FileInfo_1_0`, `sandbox=Fixture_Sandbox_1_0`, `header=Fixture_Header_1_0`.
+
+To go back: before re-enabling Cortex, restore the Cortex role names in
+`integrations.cortex.analyzers` (saving that section on the Cortex card needs its required `url`
+filled).
+
+Expect: report rows only from `fixture_engine` (all named `Fixture_*`), verdicts by marker, no
+call to Cortex, and jobs that complete instantly. This removes the need for Cortex's analyzers,
+not yet the container: `deployment/docker-compose.yml` still lists `cortex` in `suspicious`'s
+`depends_on` (`service_started`), so leaving it out needs an adapted dev compose file.
+
 ## ai_model
 
 The mail AI classifier. It is off by default (`enabled_by_default=False`).
 
-- **Provides** `mail_ai`: a mail case is handed to it instead of a Cortex AI job. A Celery task posts
-  the mail text to the model server's `/v2` API (`http://ai_inference:8090` on `suspicious_net`,
-  bearer token `AI_INFERENCE_TOKEN`) and stores the answer as one `AiAssessment` per case plus the
-  case's AI result, score, confidence and category. Only one connector may provide `mail_ai`.
+- **Provides** `analysis`, as a partial engine (`general_purpose = False`): its catalogue holds one
+  analyzer, the AI role's name, for the `mail_archive` data type only, and its jobs are deferred
+  (see [Deferred jobs](#deferred-jobs)). A mail case's archive is dispatched to the engines;
+  `run_engine_job` calls `run`, which posts the mail text to the model server's `/v2` API
+  (`http://ai_inference:8090` on `suspicious_net`, bearer token `AI_INFERENCE_TOKEN`), and
+  `on_result` stores the answer as one `AiAssessment` per case plus the case's AI result, score,
+  confidence and category. No archive, an unreadable one, a server refusal or an answer without a
+  model version closes the row as `Failure` and leaves the AI missing. Disabling it needs no
+  `force`. Its log lines use the `connectors.contrib.ai_model` logger.
 - **Events:** `case_finalised` (the only event it subscribes to; it also has a daily `label-sync`
   schedule). The hook only queues `connectors.tasks.run_campaign_detection`, which
   runs campaign detection outside the connector's circuit breaker and sends `campaign_updated` (the

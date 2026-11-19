@@ -7,6 +7,7 @@ import copy
 import logging
 from dataclasses import asdict
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import ListAPIView
@@ -20,9 +21,9 @@ from api.serializers.connectors import (
     ConnectorDeliverySerializer,
     ConnectorSerializer,
 )
-from connectors.base import URL_ERROR, HealthStatus, _dotted_get, url_errors
+from connectors.base import URL_ERROR, PROVIDER_KIND_ANALYSIS, HealthStatus, _dotted_get, url_errors
 from connectors.delivery import get_state
-from connectors.models import ConnectorDelivery
+from connectors.models import ConnectorDelivery, ConnectorState
 from connectors.registry import registry
 from settings.config import SECRET_FIELDS, get_section, invalidate_cache
 from suspicious._config_common import settings_get
@@ -45,6 +46,16 @@ def _required_field_filled(name: str, field, section: dict) -> bool:
         key = f"integrations.{name}.{field.key}"
         return bool(get_secret(key) or settings_get(key, ""))
     return bool(_dotted_get(section, field.key))
+
+
+def _is_inert(name: str) -> bool:
+    """Whether the connector's instance says it cannot work yet; an instance that fails to
+    build counts as inert. Never calls health_check (it may do network I/O)."""
+    try:
+        return registry.instantiate(name).is_inert()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("connector %s could not be instantiated: %s", name, type(exc).__name__)
+        return True
 
 
 def _compute_status(name: str, config_schema, enabled: bool, section: dict) -> str:
@@ -77,7 +88,8 @@ def _serialize_connector(name: str) -> dict:
         "config_schema": [asdict(f) for f in manifest.config_schema],
         "enabled": state.enabled,
         "enabled_by_default": manifest.enabled_by_default,
-        "status": _compute_status(name, manifest.config_schema, state.enabled, section),
+        "status": "partial" if state.enabled and _is_inert(name)
+        else _compute_status(name, manifest.config_schema, state.enabled, section),
         "last_health_ok": state.last_health_ok,
         "last_health_detail": state.last_health_detail,
         "last_health_at": state.last_health_at,
@@ -120,15 +132,38 @@ class ConnectorStateView(APIView):
             return Response({"detail": "'enabled' must be a boolean."},
                             status=status.HTTP_400_BAD_REQUEST)
         kind = registry.get(name).manifest.provides
-        if enabled and kind and any(
-            get_state(other).enabled
-            for other in registry.providers(kind) if other != name
-        ):
-            return Response({"detail": f"{name} already provides {kind}"},
-                            status=status.HTTP_409_CONFLICT)
-        state = get_state(name)
-        state.enabled = enabled
-        state.save(update_fields=["enabled", "updated_at"])
+        with transaction.atomic():
+            if kind:  # lock the kind's state rows so concurrent toggles cannot both pass a check
+                for other in registry.providers(kind):
+                    get_state(other)
+                list(ConnectorState.objects.select_for_update().filter(name__in=registry.providers(kind)))
+            # Only a general-purpose engine (Cortex) can be the last one; a partial engine
+            # (ai_model: mail_archive only) is never guarded and never counts as a fallback.
+            if (
+                not enabled
+                and kind == PROVIDER_KIND_ANALYSIS
+                and registry.get(name).general_purpose
+                and get_state(name).enabled
+                and not any(
+                    get_state(other).enabled and registry.get(other).general_purpose
+                    and not _is_inert(other)
+                    for other in registry.providers(kind) if other != name
+                )
+            ):
+                if request.data.get("force") is not True:
+                    return Response({
+                        "detail": (
+                            f"{name} is the last enabled analysis connector. Disabling it "
+                            "stops all new analysis from that connector: new cases get no "
+                            "analysis until an analysis connector is enabled. Disable it anyway?"
+                        ),
+                        "code": "last_analysis_connector",
+                    }, status=status.HTTP_409_CONFLICT)
+                logger.warning("last analysis connector %s force-disabled by %s",
+                               name, request.user)
+            state = get_state(name)
+            state.enabled = enabled
+            state.save(update_fields=["enabled", "updated_at"])
         return Response(ConnectorSerializer(_serialize_connector(name)).data)
 
 

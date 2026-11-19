@@ -17,8 +17,8 @@ def _describe(agg: CaseAggregate, analysis_done: int = 0) -> str:
             return ("Analysis complete using results reused from a prior "
                     "identical submission.")
         return ("No analyzer was applicable to this submission, so it could "
-                "not be analysed. Check that the relevant Cortex analyzers "
-                "are enabled.")
+                "not be analysed. Check that an analysis connector is "
+                "enabled and offers analyzers for this type of data.")
     if agg.failure == 0:
         return "All analyzers completed successfully. You can now view the full results."
     if agg.success == 0:
@@ -75,8 +75,9 @@ def reconcile_case_core(case) -> None:
             transition(case, LifecycleState.ANALYZING)
         return
 
-    # A mail_ai provider closes its row and writes the AI fields outside the case lock, possibly
-    # after the caller loaded `case`: reload so scoring reads them and save() does not undo them.
+    # A deferred engine job (run_engine_job) closes its row and writes its fields outside the case
+    # lock, possibly after the caller loaded `case`: reload so scoring reads them and save() does
+    # not undo them.
     case.refresh_from_db()
 
     if case.dispatched_at is None and case.creation_date > timezone.now() - RECONCILE_DISPATCH_GRACE:

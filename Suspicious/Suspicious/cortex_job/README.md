@@ -73,7 +73,7 @@ The ledger replaces the legacy 8-FK Q-object that the webhook used to reverse-wa
                └─ INSERT CaseAnalyzerJob (case, cortex_job_id, analyzer_report, status=InProgress)
 
 [webhook]    POST /api/cortex/webhook/  {jobId}
-               ├─ HMAC compare_digest against settings.CORTEX_WEBHOOK_SECRET
+               ├─ constant-time bearer secret compare (connector `webhook_secret`)
                ├─ Redis dedup (`cortex_job_processed:<jobId>`, TTL 1 h)
                ├─ SELECT CaseAnalyzerJob WHERE cortex_job_id=jobId AND status IN (Waiting, InProgress)
                └─ for case_id in matches: tasp.tasks.process_cortex_job.delay(case_id, jobId)
@@ -107,13 +107,13 @@ The ledger replaces the legacy 8-FK Q-object that the webhook used to reverse-wa
 
 - `CortexJob.run_analyzer(api, analyzer, data, data_type, case)` — atomic dispatch.
 - `CortexJob.run(api, analyzer, value, data_type, case)` — thin forwarder (kept for `mail_body` legacy hook).
-- `CortexJob.launch_cortex_jobs(self, value, data_type, case)` — multi-analyzer dispatch site. **All callers must thread a non-None `case`**; `run_analyzer` raises `TypeError` otherwise. The AI mail classification is not launched here: the mail callers hand the case to the `mail_ai` provider (`connectors.providers.queue_provider_analysis`).
+- `CortexJob.launch_cortex_jobs(self, value, data_type, case)` — multi-analyzer dispatch site. **All callers must thread a non-None `case`**; `run_analyzer` raises `TypeError` otherwise. The AI mail classification is not launched here: the mail callers hand the case to `ai_model.mailinfo.dispatch_mail_ai`, which dispatches the mail archive to the analysis engines (the `ai_model` engine).
 - `CortexJobManager.update_single_job(caj)` — sync one CAJ + its AR from Cortex.
 - `CortexJobManager.finalise_case(case)` — aggregate per-artifact results, run `generate_description`, then `CortexAnalyzerReports.get_report(case)` if the case flipped to `Done`. Called from `process_cortex_job` once the last pending CAJ for the case transitions out of pending.
 - `CortexJobManager.manage_jobs(case)` — unchanged per-case bulk pass, used by the cron fallback.
 
-### `views.py` (registered under `/api/cortex/webhook/`)
-HMAC-authenticated webhook entry point. Helper `_find_cases_for_job` is the single source of truth for case lookup; the legacy `_find_case_ids_for_job` Q-object traversal is removed.
+### Webhook (route in `api/urls.py`, handled by `connectors.engines.handle_webhook`)
+Bearer-secret authenticated webhook entry point. Helper `_find_cases_for_job` is the single source of truth for case lookup; the legacy `_find_case_ids_for_job` Q-object traversal is removed.
 
 ---
 

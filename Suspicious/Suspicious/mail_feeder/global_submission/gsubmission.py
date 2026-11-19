@@ -14,8 +14,8 @@ from mail_feeder.email_info.email_info import MailInfoService
 
 from mail_feeder.utils.user_creation.creation import UserCreationService
 
-from connectors.providers import mark_ai_missing, queue_mail_ai
-from cortex_job.cortex_utils.cortex_and_job_management import CortexJob
+from ai_model.mailinfo import dispatch_mail_ai, mark_ai_missing
+from connectors import engines
 
 from .models import MailSubmissionData
 from .utils import safe_execution, extract_email_address
@@ -178,10 +178,9 @@ class GlobalSubmissionService:
         artifact_service.dispatch_pending(case)
         for service in attachment_result.services:
             service.dispatch_pending(case)
-        cortex = CortexJob()
         for value, data_type in header_intents + body_intents:
             try:
-                cortex.launch_cortex_jobs(value=value, data_type=data_type, case=case)
+                engines.dispatch(value=value, data_type=data_type, case=case)
             except Exception:
                 fetch_mail_logger.exception(
                     "Failed to launch Cortex jobs (case=%s data_type=%s)",
@@ -190,7 +189,7 @@ class GlobalSubmissionService:
                 )
         if attachment_result.ai_archive is not None:
             try:
-                queue_mail_ai(case)
+                dispatch_mail_ai(case)
             except Exception:
                 fetch_mail_logger.exception(
                     "Failed to hand the case to the mail AI provider (case=%s)",

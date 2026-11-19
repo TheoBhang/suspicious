@@ -79,6 +79,44 @@ rows appear for intermittent errors, auth failures and similar.
 - On upgrade, disable any old Cortex-side `AI_Mail_Analyzer` analyzer in Cortex. Otherwise the sync logs an ERROR about it every minute, because the row now belongs to the `ai_model` connector.
 - `/api/cortex/webhook/` reads its secret through the runtime config layer (Vault-backed, cached 60 s) instead of only at boot, and falls back to `CORTEX_WEBHOOK_SECRET` when that config cannot be read.
 
+## fixture_engine
+
+Category Analysis, provides `analysis`, off by default. A fake engine for tests and dev stacks: it
+answers instantly from the analysed value itself, with no network and no database. **Never enable
+it in production.**
+
+- **Inert until `confirm_fixture` is exactly the boolean `true`.** While it is not, `catalog`
+  offers nothing, `start` does nothing, the health check reports it inert and every catalog call
+  logs one warning. Enabling the connector in Settings alone does nothing. Why: an enabled fixture
+  engine would mark everything it does not recognise as safe.
+- **Verdict markers.** A case-insensitive substring of the value (for a file, its path):
+  `malicious`, `phish`, `evil` give malicious; `suspicious` gives suspicious; anything else is
+  safe; the most severe marker wins. For a mail body the engine only sees the path the platform
+  passes, never the body text.
+- **Analyzers offered.** By data type (url, domain, ip, hash, mail): `Fixture_Reputation_1_0`.
+  By name only (role analyzers): `Fixture_Yara_1_0` (file, mail_body), `Fixture_FileInfo_1_0`
+  (file), `Fixture_Sandbox_1_0` (file), `Fixture_Header_1_0` (mail_header).
+- **Blast radius if confirmed beside Cortex in production.** A lone fixture "malicious" turns a
+  case Dangerous, so any production URL containing `phish` or `evil` would be flagged. Its
+  analyzers are tier 3 (the tier lookup finds no prefix), so a fixture "safe" cannot override a
+  real tier-1 or tier-2 malicious in the observable engine. Unconfirming leaves the `Fixture_*`
+  `Analyzer` rows active (cosmetic: dispatch ignores `is_active`).
+- Every stored report is visibly fake: analyzer names start with `Fixture_`, and the confirmed
+  health detail says "dev only".
+
+### Running without Cortex (dev)
+
+1. In Settings > Connectors, enable `fixture_engine` and set `confirm_fixture` to true.
+2. Disable `cortex`. Since `fixture_engine` is already enabled and confirmed, cortex is not the
+   last analysis connector, so the last-engine guard does not ask for confirmation.
+3. Set the `integrations.cortex.analyzers` roles to `yara=Fixture_Yara_1_0`,
+   `file_info=Fixture_FileInfo_1_0`, `sandbox=Fixture_Sandbox_1_0`, `header=Fixture_Header_1_0`.
+
+Expect: report rows only from `fixture_engine` (all named `Fixture_*`), verdicts by marker, no
+call to Cortex, and jobs that complete instantly. This removes the need for Cortex's analyzers,
+not yet the container: `deployment/docker-compose.yml` still lists `cortex` in `suspicious`'s
+`depends_on` (`service_started`), so leaving it out needs an adapted dev compose file.
+
 ## ai_model
 
 The mail AI classifier. It is off by default (`enabled_by_default=False`).

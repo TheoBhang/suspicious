@@ -39,7 +39,11 @@ and a later pass retries. An engine must never answer "gone" for a job it merely
   engine starts nothing, but its pending rows are still fetched, so a case in flight completes.
 - **Name ownership.** `Analyzer.source` names the connector that owns the row; `Analyzer.name`
   stays unique. An engine offering a name another source owns is skipped (logged) by both the
-  catalogue sync and dispatch, and the sync deactivates only its own rows. Cortex keeps its raw
+  catalogue sync and dispatch, and the sync deactivates only its own rows. Two exceptions: the
+  catalogue sync never creates or claims the row named like the AI role
+  (`integrations.cortex.analyzers.ai`), and at dispatch a non-Cortex engine's entry that declares
+  `mail_archive` adopts an existing row of its name from any source (source set to the engine, id kept), as
+  does any entry for a row of the old provider path (`provider:` id). Cortex keeps its raw
   ids; any other engine stores `<connector>:<id>` in `analyzer_cortex_id` and `<connector>-<id>`
   in `cortex_job_id`.
 - **Webhook.** `POST /api/connectors/<name>/webhook/` is the generic route: the engine
@@ -87,9 +91,9 @@ on it. Every deferred job of this release is a `mail_archive` job.
 
 Rows opened before the upgrade by the retired `mail_ai` provider slot (`provider-<hex>` ids, no
 report) still finish: the old Celery task `connectors.tasks.run_provider_analysis` stays for one
-release as a forwarder into the same code as `run_engine_job`, through the engine named by the
-row's analyzer, else `ai_model`; with neither registered the row closes `Failure` ("no engine for
-this job").
+release as a forwarder into the same code as `run_engine_job`, always through `ai_model` (the
+slot's only implementer), whatever the row's analyzer source; with `ai_model` not registered the
+row closes `Failure` ("no engine for this job").
 
 ## cortex
 

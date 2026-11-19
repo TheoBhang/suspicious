@@ -19,13 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The mail AI verdict is an `ai_model` analysis-engine job; the `mail_ai` provider slot is
   removed.** Jobs queued before the upgrade still finish: the old task
   `connectors.tasks.run_provider_analysis` stays one release as a forwarder that runs the
-  `provider-` row through the engine path. `ai_model` keeps its name, config and enabled state.
-  Disabling `ai_model` no longer needs `force` (it is not a general-purpose engine). With Cortex
+  `provider-` row through `ai_model` on the engine path. `ai_model` keeps its name, config and
+  enabled state. The "last enabled analysis connector" guard (409 `last_analysis_connector`,
+  `force: true`) now applies only to general-purpose engines, and `ai_model` does not count as
+  one. After `ai_model` is disabled, its already-queued jobs (retries included) still call the
+  inference server. An `Analyzer` row named like the AI role that a Cortex sync created or that
+  still belongs to Cortex is taken over by `ai_model` on the next mail; the Cortex sync no longer
+  creates or claims that name. With Cortex
   enabled, each mail now triggers one extra Cortex catalogue lookup for the AI analyzer name. Log
   lines of the AI job ("mail AI provider failed", shadow store) moved from the `connectors.delivery`
   logger to `connectors.contrib.ai_model`. A third-party connector that sets `provides="mail_ai"` no
   longer loads (listed in the connector load errors); `Connector.analyze` is no longer called:
   implement the `analysis` engine contract (`catalog`, `start`, `run`, `on_started`, `on_result`).
+- **Deploy order: roll the Celery workers out before or together with the web tier.** An old
+  worker rejects the new `connectors.tasks.run_engine_job` task as unregistered; the mail's AI row
+  then waits for `fail_stale_jobs` (up to 2 h) and the mail finalises with the AI missing.
 
 ### Added
 

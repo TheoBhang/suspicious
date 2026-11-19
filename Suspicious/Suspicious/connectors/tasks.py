@@ -38,43 +38,10 @@ def run_connector_sync(self, connector_name: str):
 
 @shared_task(bind=True, acks_late=True, reject_on_worker_lost=True, max_retries=2)
 def run_provider_analysis(self, case_id: int, kind: str, job_id: int):
-    """Run the enabled ``kind`` provider for one case and close its ledger row.
-    Only a retryable ProviderUnavailable is retried; anything else (an open
-    breaker, a disabled provider, a 4xx) finishes the row as failure at once."""
-    from common.http_client import get_breaker
-    from connectors.providers import (
-        ProviderUnavailable, finish_provider_analysis, provider_connector,
-    )
-    from cortex_job.models import CaseAnalyzerJob
-
-    if not CaseAnalyzerJob.objects.filter(
-        pk=job_id, status__in=CaseAnalyzerJob.PENDING_STATUSES
-    ).exists():
-        return  # closed already (redelivery, or fail_stale_jobs got there first)
-    started = time.monotonic()
-    name, result, error = kind, None, "provider returned no result"
-    try:
-        connector = provider_connector(kind)
-        name = connector.manifest.name
-        with get_breaker(name).calling():
-            result = connector.analyze(kind, case_id)
-    except ProviderUnavailable as exc:
-        if exc.retryable and self.request.retries < self.max_retries:
-            raise self.retry(
-                exc=exc, countdown=5 * 2 ** self.request.retries + random.uniform(0, 3)
-            )
-        error = str(exc)
-    except Exception as exc:  # noqa: BLE001 — connector code is untrusted
-        error = f"{type(exc).__name__}: {exc}"
-    ledger = dict(attempt=self.request.retries + 1, connector=name,
-                  duration_ms=int((time.monotonic() - started) * 1000))
-    if result is not None:
-        try:
-            finish_provider_analysis(job_id, result, **ledger)
-            return
-        except Exception as exc:  # noqa: BLE001 — a bad result must not strand the case
-            error = f"could not store the result: {type(exc).__name__}: {exc}"
-    finish_provider_analysis(job_id, None, error=error, **ledger)
+    """Forwarder for mail AI jobs queued by the old provider slot before the upgrade: remove after
+    the next release. ``job_id`` is the pk of the report-less ``provider-`` row the old code opened;
+    it runs as a deferred engine job, through the engine named by the row's analyzer, else ai_model."""
+    _run_deferred_job(self, job_id, fallback="ai_model")
 
 
 @shared_task(bind=True, acks_late=True, reject_on_worker_lost=True, max_retries=2)
@@ -83,8 +50,14 @@ def run_engine_job(self, row_id: int):
     Only a retryable ProviderUnavailable is retried; anything else (an open breaker,
     an error, a result that is not one) closes the row as Failure at once. A connector
     disabled since the start still runs: a started job finishes."""
+    _run_deferred_job(self, row_id)
+
+
+def _run_deferred_job(task, row_id: int, fallback: str = "") -> None:
+    """The body of run_engine_job, shared with the forwarder. ``fallback`` names the engine used
+    when the row's source is not a registered analysis engine; with none, the row closes Failure."""
     from common.http_client import get_breaker
-    from connectors.base import DATA_TYPE_MAIL_ARCHIVE, FETCH_RESULT, FetchResult
+    from connectors.base import DATA_TYPE_MAIL_ARCHIVE, FETCH_RESULT, PROVIDER_KIND_ANALYSIS, FetchResult
     from connectors.engines import _external_job_id
     from connectors.providers import ProviderUnavailable
     from connectors.registry import registry
@@ -96,6 +69,13 @@ def run_engine_job(self, row_id: int):
         return  # gone or closed already (redelivery, or fail_stale_jobs got there first)
     name, analyzer_name, case_id = row.analyzer.source, row.analyzer.name, row.case_id
     started = time.monotonic()
+    if fallback and name not in registry.providers(PROVIDER_KIND_ANALYSIS):
+        if fallback not in registry.providers(PROVIDER_KIND_ANALYSIS):
+            _close_engine_job(row_id, name, analyzer_name, None,
+                              FetchResult(FETCH_RESULT, "Failure", payload={"reason": "no engine for this job"}),
+                              attempt=task.request.retries + 1, duration_ms=0)
+            return
+        name = fallback
     result, error, connector = None, "engine returned no result", None
     try:
         connector = registry.instantiate(name)
@@ -104,9 +84,9 @@ def run_engine_job(self, row_id: int):
             result = connector.run(_external_job_id(name, row.cortex_job_id),
                                    DATA_TYPE_MAIL_ARCHIVE, str(case_id))
     except ProviderUnavailable as exc:
-        if exc.retryable and self.request.retries < self.max_retries:
-            raise self.retry(
-                exc=exc, countdown=5 * 2 ** self.request.retries + random.uniform(0, 3)
+        if exc.retryable and task.request.retries < task.max_retries:
+            raise task.retry(
+                exc=exc, countdown=5 * 2 ** task.request.retries + random.uniform(0, 3)
             )
         error = str(exc)
     except Exception as exc:  # noqa: BLE001 — connector code is untrusted
@@ -115,7 +95,7 @@ def run_engine_job(self, row_id: int):
         error, result = f"not a result (state {result.state!r}, status {result.status!r})", None
     if result is None:
         result = FetchResult(FETCH_RESULT, "Failure", payload={"reason": error})
-    _close_engine_job(row_id, name, analyzer_name, connector, result, attempt=self.request.retries + 1,
+    _close_engine_job(row_id, name, analyzer_name, connector, result, attempt=task.request.retries + 1,
                       duration_ms=int((time.monotonic() - started) * 1000))
 
 

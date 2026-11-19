@@ -1,8 +1,8 @@
 """Parity suite: the mail AI verdict as an analysis-engine job (dispatch_mail_ai, run_engine_job,
-AiModelConnector.run/on_started/on_result) writes what the mail_ai provider path wrote.
+AiModelConnector.run/on_started/on_result) writes what the retired mail_ai provider path wrote.
 
-Ported from connectors/tests/test_provider_dispatch.py and the ai_model provider tests, with the
-same assertions on the case fields, AiAssessment, ledger rows and delivery rows."""
+Ported from the deleted connectors/tests/test_provider_dispatch.py and the ai_model provider tests,
+with the same assertions on the case fields, AiAssessment, ledger rows and delivery rows."""
 from datetime import timedelta
 from unittest import mock
 
@@ -16,7 +16,7 @@ from ai_model.mailinfo import dispatch_mail_ai, has_assessment, mark_ai_missing
 from ai_model.models import AiAssessment, ShadowResult
 from ai_model.tests.test_registry import cand
 from case_handler.lifecycle import LifecycleState
-from case_handler.models import Case
+from case_handler.models import Case, Result
 from common.http_client import BREAKERS
 from common.storage import FakeObjectStore
 from connectors.base import (
@@ -24,7 +24,6 @@ from connectors.base import (
     FETCH_RESULT,
     PROVIDER_KIND_ANALYSIS,
     CatalogEntry,
-    ProviderResult,
 )
 from connectors.contrib.ai_model import connector as module
 from connectors.contrib.ai_model import mailtext
@@ -294,14 +293,16 @@ class EnginePathTest(EnginePathMixin, TestCase):
         self.classify.return_value = answer
         self.assert_no_answer(self.run_task(self.queue()), "no model_version")
 
-    def test_the_run_payload_carries_what_provider_result_carried(self):
+    def test_the_run_payload_carries_what_the_provider_result_carried(self):
         result = AiModelConnector(CONFIG).run("x", DATA_TYPE_MAIL_ARCHIVE, str(self.case.id))
         self.assertEqual((result.state, result.status), (FETCH_RESULT, "Success"))
         self.assertEqual(set(result.payload), {"result", "score", "confidence", "category",
                                                "model_version", "assessment", "shadow", "reason"})
-        # Same fields as the ProviderResult the old path built from the same answer.
-        self.assertEqual(ProviderResult(**result.payload), ProviderResult(
-            "DANGEROUS", 7, 82, "Classic_phishing", "v0", result.payload["assessment"]))
+        # Same values as the ProviderResult the old path built from the same answer.
+        self.assertEqual({k: result.payload[k] for k in ("result", "score", "confidence", "category",
+                                                         "model_version", "reason", "shadow")},
+                         {"result": "DANGEROUS", "score": 7, "confidence": 82, "category": "Classic_phishing",
+                          "model_version": "v0", "reason": "", "shadow": None})
 
     # ── errors ──────────────────────────────────────────────────────────────
 
@@ -548,17 +549,18 @@ class EndToEndParityTest(EnginePathMixin, TestCase):
     def instantiate(self, name):
         return self.cortex if name == "cortex" else AiModelConnector(CONFIG)
 
-    def old_path_case(self):
-        from connectors.providers import finish_provider_analysis, queue_provider_analysis
-
-        case, _ = make_mail_case(n=2)
-        with mock.patch("connectors.providers.enabled_provider", return_value="ai_model"), \
-                mock.patch("connectors.tasks.run_provider_analysis"):
-            job = queue_provider_analysis(case, "mail_ai")
-        result = ProviderResult(**module.result_from_server(DANGEROUS))
-        with self.captureOnCommitCallbacks(execute=True):
-            self.assertTrue(finish_provider_analysis(job.id, result, connector="ai_model"))
-        return case
+    # What the retired provider path (queue_provider_analysis + finish_provider_analysis) gave for
+    # the same server answer, recorded from it before it was removed.
+    OLD_FIELDS = {"results_ai": "Dangerous", "score_ai": 7.0, "confidence_ai": 82.0,
+                  "category_ai": "Classic_phishing", "results": "Failure", "score": 5.0,
+                  "final_score": 5.0, "confidence": 0.0, "final_confidence": 0.0,
+                  "lifecycle_state": "FINALIZED", "inconclusive_reason": "", "verdict_rationale": []}
+    OLD_ASSESSMENT = {
+        "model_version": "v0", "result": "DANGEROUS", "sub_class": "CLASSIC_PHISHING", "score": 7.0,
+        "confidence": 82.0, "probabilities": {"SAFE": "5.00%", "UNWANTED": "10.00%", "DANGEROUS": "85.00%"},
+        "sub_probabilities": {"CLASSIC_PHISHING": "70.00%"}, "tier": "",
+        "contributing_phrases": [["verify", 0.3]], "similar_cases": [], "campaign_embedding": "[0.1, 0.2]",
+        "embedding_version": "cmp-e1", "latency_ms": 12}
 
     @mock.patch("cortex_job.cortex_utils.reconciliation.emit_connector_event")
     def test_the_ai_vote_and_verdict_equal_the_old_paths(self, _):
@@ -575,23 +577,13 @@ class EndToEndParityTest(EnginePathMixin, TestCase):
         self.reconcile.delay.assert_called_once_with(self.case.id)
         reconcile_case_core(Case.objects.get(pk=self.case.pk))
 
-        old = self.old_path_case()
-        reconcile_case_core(Case.objects.get(pk=old.pk))
-
-        new, old = Case.objects.get(pk=self.case.pk), Case.objects.get(pk=old.pk)
+        new = Case.objects.get(pk=self.case.pk)
         self.assertEqual(new.lifecycle_state, LifecycleState.FINALIZED)
-        fields = ("results_ai", "score_ai", "confidence_ai", "category_ai", "results", "score",
-                  "final_score", "confidence", "final_confidence", "lifecycle_state",
-                  "inconclusive_reason", "verdict_rationale")
-        self.assertEqual({f: getattr(new, f) for f in fields}, {f: getattr(old, f) for f in fields})
+        self.assertEqual({f: getattr(new, f) for f in self.OLD_FIELDS}, self.OLD_FIELDS)
         self.assertEqual(self.ai_fields(new), DANGEROUS_FIELDS)
 
-        def votes(case):
-            ai = collect_signals(case)[1]
-            return sorted((v.analyzer, v.weight, v.band) for v in collect_votes(case, ai))
-
-        self.assertEqual(votes(new), votes(old))
-        self.assertIn(ai_analyzer_name(), [v[0] for v in votes(new)])
-        fresh = lambda case: {k: v for k, v in AiAssessment.objects.filter(case=case).values().get().items()
-                              if k not in ("id", "case_id", "created_at", "updated_at")}
-        self.assertEqual(fresh(new), fresh(old))
+        votes = sorted((v.analyzer, v.weight, v.band) for v in collect_votes(new, collect_signals(new)[1]))
+        self.assertEqual(votes, [(ai_analyzer_name(), 0.2, Result.SUSPICIOUS)])
+        fresh = {k: v for k, v in AiAssessment.objects.filter(case=new).values().get().items()
+                 if k not in ("id", "case_id", "created_at", "updated_at")}
+        self.assertEqual(fresh, self.OLD_ASSESSMENT)

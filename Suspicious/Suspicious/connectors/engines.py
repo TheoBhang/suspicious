@@ -406,7 +406,7 @@ def refresh(caj, cache: dict | None = None) -> None:
     ``cache`` (ledger job id -> FetchResult) makes rows sharing a job fetch it once.
     A disabled engine is still fetched: its started jobs must finish."""
     report = caj.analyzer_report
-    if report is None:  # a provider row (ai_model): its task closes it
+    if report is None:  # a deferred job: run_engine_job closes it
         return
     name = caj.analyzer.source
     if name not in registry.names():

@@ -56,7 +56,7 @@ MAIL_CLASSIFIER_ID = "mail_classifier"
 
 
 def _result(result, score, confidence, category, model_version, assessment, reason="", shadow=None) -> dict:
-    """The job payload: what ProviderResult carried, under the same names.
+    """The job payload handed to on_result.
     result: SAFE | UNWANTED | DANGEROUS | INCONCLUSIVE; score, confidence (percent) and category
     as the case stores them; assessment: the remaining AiAssessment fields under the model's
     names; reason: why, when there is no answer; shadow: the shadow model's answer, never scored."""
@@ -70,7 +70,7 @@ def _inconclusive(reason: str) -> dict:
 
 def to_fetch_result(result: dict) -> FetchResult:
     """A result without a model_version is the model's "no answer" (unreadable mail, a refusal):
-    a Failure whose reason says so, as finish_provider_analysis treated it."""
+    a Failure whose reason says so."""
     if result["model_version"]:
         return FetchResult(FETCH_RESULT, "Success", payload=result)
     reason = f"no model_version ({result['reason']})" if result["reason"] else "no model_version"

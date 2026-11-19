@@ -19,12 +19,10 @@ VALID_EVENTS = frozenset({
     EVENT_CASE_CREATED, EVENT_CASE_FINALISED, EVENT_CASE_MODIFIED, EVENT_CAMPAIGN_UPDATED,
 })
 
-# Analysis-provider slots: a connector whose manifest sets ``provides`` to one of
-# these kinds supplies that analysis (see Connector.analyze). One enabled per kind.
-PROVIDER_KIND_MAIL_AI = "mail_ai"
-# Analysis engines (Cortex first). Unlike mail_ai, several may be enabled at once.
+# A connector whose manifest sets ``provides`` to "analysis" is an analysis engine (Cortex
+# first; see Connector.catalog/start/fetch/run). Several may be enabled at once.
 PROVIDER_KIND_ANALYSIS = "analysis"
-VALID_PROVIDER_KINDS = frozenset({PROVIDER_KIND_MAIL_AI, PROVIDER_KIND_ANALYSIS})
+VALID_PROVIDER_KINDS = frozenset({PROVIDER_KIND_ANALYSIS})
 
 FIELD_TYPES = frozenset({"str", "int", "bool", "url", "secret"})
 
@@ -115,7 +113,7 @@ class ConnectorManifest:
     events: tuple[str, ...] = ()
     schedules: tuple[Schedule, ...] = ()
     enabled_by_default: bool = False
-    provides: str = ""  # analysis-provider kind, or "" for a plain connector
+    provides: str = ""  # "analysis" for an analysis engine, "" for a plain connector
 
     def validate(self) -> None:
         if not _SLUG_RE.match(self.name):
@@ -139,19 +137,6 @@ class ConnectorManifest:
                 raise ValueError(
                     f"schedule {schedule.name!r} interval must be > 0 seconds"
                 )
-
-
-@dataclass(frozen=True)
-class ProviderResult:
-    """What an analysis provider returns from ``Connector.analyze``."""
-    result: str            # SAFE | UNWANTED | DANGEROUS | INCONCLUSIVE
-    score: float           # as Case.score_ai stores it (already rounded)
-    confidence: float      # percent, as Case.confidence_ai stores it
-    category: str          # as Case.category_ai stores it
-    model_version: str
-    assessment: dict       # remaining AiAssessment fields; keys are the model's field names
-    reason: str = ""       # why, when result is INCONCLUSIVE
-    shadow: dict | None = None  # the shadow model's answer, stored beside the case, never scored
 
 
 @dataclass(frozen=True)
@@ -247,11 +232,6 @@ class Connector(ABC):
         raise NotImplementedError
 
     def sync(self) -> None:  # pragma: no cover
-        raise NotImplementedError
-
-    def analyze(self, kind: str, case_id: int) -> ProviderResult:  # pragma: no cover
-        """Analysis-provider hook: implemented by connectors whose manifest
-        ``provides`` the given kind."""
         raise NotImplementedError
 
     def catalog(self, data_type: str | None = None, name: str | None = None) -> list[CatalogEntry]:  # pragma: no cover

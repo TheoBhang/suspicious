@@ -137,12 +137,6 @@ class ConnectorStateView(APIView):
                 for other in registry.providers(kind):
                     get_state(other)
                 list(ConnectorState.objects.select_for_update().filter(name__in=registry.providers(kind)))
-            if enabled and kind and kind != PROVIDER_KIND_ANALYSIS and any(
-                get_state(other).enabled
-                for other in registry.providers(kind) if other != name
-            ):
-                return Response({"detail": f"{name} already provides {kind}"},
-                                status=status.HTTP_409_CONFLICT)
             # Only a general-purpose engine (Cortex) can be the last one; a partial engine
             # (ai_model: mail_archive only) is never guarded and never counts as a fallback.
             if (

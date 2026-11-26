@@ -31,6 +31,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       feeder: ${{ steps.filter.outputs.feeder }}
       renderer: ${{ steps.filter.outputs.renderer }}
+      dockerpolicy: ${{ steps.filter.outputs.dockerpolicy }}
       analyzers: ${{ steps.filter.outputs.analyzers }}
       ui: ${{ steps.filter.outputs.ui }}
       ci: ${{ steps.filter.outputs.ci }}
@@ -46,6 +47,8 @@ jobs:
               - 'email-feeder/**'
             renderer:
               - 'mail-renderer/**'
+            dockerpolicy:
+              - 'deployment/docker/docker-policy-proxy/**'
             analyzers:
               - 'Analyzers/**'
             ui:
@@ -284,6 +287,21 @@ jobs:
           tags: suspicious-feeder:ci
           cache-from: type=gha,scope=suspicious-feeder
           cache-to: type=gha,mode=max,scope=suspicious-feeder
+
+  docker-policy-proxy-test:
+    needs: changes
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.ci == 'true' ||
+      needs.changes.outputs.dockerpolicy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # Standard library only; the service runs on the stock python:3.12-slim image.
+      - run: python -m unittest discover -s deployment/docker/docker-policy-proxy -v
 
   docker-build-mail-renderer:
     needs: changes

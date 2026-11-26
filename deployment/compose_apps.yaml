@@ -283,6 +283,40 @@ services:
       - no-new-privileges:true
     networks:
       docker_cortex:
+        aliases: [docker-proxy-upstream]
+
+  # What Cortex actually talks to as docker-proxy-cortex:2375. The socket proxy above
+  # cannot read request bodies; this service reads container create and image pull
+  # requests and refuses the dangerous ones (Privileged, host binds outside the job
+  # directory, images not in the analyzer catalogs, ...). DOCKER_POLICY_MODE=log
+  # forwards everything and logs what it would refuse: run the stack in log mode,
+  # read `docker logs docker_policy_cortex`, then set enforce. Stock Python image,
+  # the script is bind-mounted, nothing to build or pull from our registry.
+  docker_policy_cortex:
+    image: python:3.12-slim
+    init: true
+    restart: unless-stopped
+    command: ["python", "-u", "/app/docker_policy_proxy.py"]
+    user: "65534:65534"
+    read_only: true
+    environment:
+      DOCKER_POLICY_MODE: "${DOCKER_POLICY_MODE:-log}"
+      DOCKER_POLICY_UPSTREAM: "docker-proxy-upstream:2375"
+      DOCKER_POLICY_JOB_DIR: "${CORTEX_PATH}/jobs"
+      DOCKER_POLICY_CATALOGS: "/catalogs/custom.json,/catalogs/public.json"
+      DOCKER_POLICY_EXTRA_IMAGES: "${DOCKER_POLICY_EXTRA_IMAGES:-}"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - "${DOCKER_POLICY_PATH:-./docker/docker-policy-proxy}/docker_policy_proxy.py:/app/docker_policy_proxy.py:ro"
+      - "${CUSTOM_ANALYZERS_PATH}/analyzers.json:/catalogs/custom.json:ro"
+      - "${CORTEX_PATH}/Cortex-Analyzers-Public/analyzers/analyzers.json:/catalogs/public.json:ro"
+    mem_limit: 128m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      docker_cortex:
         aliases: [docker-proxy-cortex]
 
   # ── ai_inference (persistent AIMailAnalyzer model server) ───────────────

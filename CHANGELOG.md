@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker rejects the new `connectors.tasks.run_engine_job` task as unregistered; the mail's AI row
   then waits for `fail_stale_jobs` (up to 2 h) and the mail finalises with the AI missing.
 
+### Security
+
+- New `docker_policy_cortex` service between Cortex and the Docker socket proxy: it reads container
+  create and image pull request bodies and refuses privileged containers, host binds outside the
+  job directory, images not in the analyzer catalogs and endpoints analyzers do not use
+  (Sec-Gemini VULN-01 residue). It ships in `DOCKER_POLICY_MODE=log` (forward and log what it would
+  refuse); set `enforce` once the log shows no `would_deny`. `docker_proxy_cortex` now answers to the
+  alias `docker-proxy-upstream`, and Cortex's `docker-proxy-cortex` name points at the new service, so
+  Cortex's configuration is unchanged. New optional `.env` keys: `DOCKER_POLICY_MODE`,
+  `DOCKER_POLICY_EXTRA_IMAGES`, `DOCKER_POLICY_PATH`. See `docs/operations/deploy.md`.
+
 ### Added
 
 - `fixture_engine` connector (dev and tests only, inert until `confirm_fixture` is true): an instant fake analysis engine whose verdicts come from markers in the value, plus a "Running without Cortex (dev)" recipe in `docs/components/backend/connectors.md`.

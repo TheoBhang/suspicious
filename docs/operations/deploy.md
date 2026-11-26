@@ -145,12 +145,28 @@ the Docker provider and its proxy were removed. A Traefik with the socket, or a
 read-only proxy, still exposes every container's environment variables (secrets
 included) to a compromised Traefik.
 
-The Cortex proxy is a narrower surface, not a complete fix. Cortex has to create
-containers to run analyzers, and the proxy filters by path and method, not by
-request body, so a compromised Cortex could still ask for a privileged
-container. Treat Cortex as high risk: run it on a host where the Docker daemon
-is rootless, or run analyzers on a dedicated host, if the platform handles
-hostile content from untrusted reporters.
+The socket proxy alone is a narrower surface, not a complete fix: it filters by path and
+method, not by request body, so a compromised Cortex could still ask for a privileged container.
+A second service, `docker_policy_cortex` (`deployment/docker/docker-policy-proxy/`), sits between
+Cortex and that proxy and reads the body of container create and image pull requests. It refuses:
+
+- an image that is not in the analyzer catalogs (`analyzers.json` of the public and custom
+  catalogs, plus `DOCKER_POLICY_EXTRA_IMAGES`, comma separated, for anything else);
+- `Privileged`, added capabilities, devices, device requests, `Mounts`, `VolumesFrom`, port
+  bindings, host PID, IPC, user or UTS namespaces, host or `container:` networking, `unconfined`
+  or `label=disable` security options, a non-default runtime;
+- a bind whose source is not inside the Cortex job directory (`${CORTEX_PATH}/jobs`), including
+  named volumes and `..` escapes;
+- any endpoint an analyzer run does not use (exec, update, archive, volumes, networks, build).
+
+`DOCKER_POLICY_MODE` selects `log` (the default: everything is forwarded, and what would have been
+refused is logged as `would_deny`) or `enforce` (answers 403). Run in `log` first, run a few of
+each analyzer you use, then check
+`docker logs docker_policy_cortex | grep -E '"verdict": "(would_deny|deny)"'`. When that is empty,
+set `DOCKER_POLICY_MODE=enforce` in `.env` and recreate the service. On the dev stack a run of 14
+analyzers sent only a bind of the job directory in `HostConfig`; nothing was flagged. The policy is
+not a sandbox: an allowed analyzer image still runs as root in its own container with network
+access. Rootless Docker or a dedicated analyzer host remain the stronger options.
 
 **Required when you upgrade:** if your `traefik.yaml` defines a `providers.docker`
 section, remove it and declare those routes under `traefik/dynamic`. `make deploy`

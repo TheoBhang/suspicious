@@ -173,7 +173,7 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-      docker_proxy_cortex:
+      docker_policy_cortex:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:9001/api/status | grep -q 200 || exit 1"]
@@ -227,6 +227,14 @@ services:
       service: docker_proxy_cortex
     image: ghcr.io/tecnativa/docker-socket-proxy:v0.4.1
     container_name: ${SVC_PREFIX:-}docker_proxy_cortex
+
+  docker_policy_cortex:
+    extends:
+      file: compose_apps.yaml
+      service: docker_policy_cortex
+    container_name: ${SVC_PREFIX:-}docker_policy_cortex
+    depends_on:
+      - docker_proxy_cortex
 
   # ── Reverse proxy ─────────────────────────────────────────────────────────
 

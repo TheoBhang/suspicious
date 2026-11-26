@@ -163,7 +163,11 @@ Cortex and that proxy and reads the body of container create and image pull requ
 refused is logged as `would_deny`) or `enforce` (answers 403). Run in `log` first, run a few of
 each analyzer you use, then check
 `docker logs docker_policy_cortex | grep -E '"verdict": "(would_deny|deny)"'`. When that is empty,
-set `DOCKER_POLICY_MODE=enforce` in `.env` and recreate the service. On the dev stack a run of 14
+set `DOCKER_POLICY_MODE=enforce` in `.env` and recreate the service. Recreating `docker_policy_cortex` drops its connections for a
+couple of seconds: any analyzer job being started, waited on or collected at that moment fails with
+"Connection refused" (seen on the dev stack when switching to `enforce`). Switch modes while no
+analyzers are running; jobs lost anyway are failed by the stale-job rescue (`fail_stale_jobs`, after
+`STALE_JOB_TIMEOUT_SECONDS`) or can be redone from the case. On the dev stack a run of 14
 analyzers sent only a bind of the job directory in `HostConfig`; nothing was flagged. The policy is
 not a sandbox: an allowed analyzer image still runs as root in its own container with network
 access. Rootless Docker or a dedicated analyzer host remain the stronger options.

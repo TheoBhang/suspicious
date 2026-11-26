@@ -34,7 +34,7 @@ Add `score_process/scoring/cortex_analyzers/contrib/<name>.py` with an `Analyzer
 ## 5. Check before enabling in production
 
 1. Enable the analyzer on a test Cortex, then run it over a few known cases.
-2. Run `python manage.py backtest_scoring` before and after. It replays finalised cases through the engine and reports verdict changes; look closely at any case that moves between Safe and Dangerous.
+2. Run `python manage.py score_replay` before and after, on a restored copy of the database. It replays the live scoring path on stored cases without keeping a write, and reports two views: drift against the stored verdict, and accuracy against analyst verdicts (missed threats and false alarms, with confidence intervals). Look closely at any case that moves between Safe and Dangerous. `backtest_scoring` is the older, approximate tool (analyzer reports only, no AI vote) and is kept only for `ai_model_engine_replay`.
 3. Enable it in production Cortex, check that the new analyzer appears in the Settings scoring panel, and watch the next cases for unexpected failures.
 
 The analyzers listed on the roadmap (Shodan, AbuseIPDB, Hybrid Analysis, Browserling) are not enabled in this repository's development stack because they need accounts or API keys.

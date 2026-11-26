@@ -1,6 +1,10 @@
 """Replay finalised cases through the new scoring engine and report verdict
 drift against the stored (old-engine) verdict. Read-only: never writes a Case.
 
+SUPERSEDED by ``score_replay`` for any verdict question: it replays the real finalise path (AI
+vote, lists, escalation) and separates analyst-edited cases. This command stays because
+``ai_model_engine_replay`` reuses ``_signals_for``.
+
 The stored ``Case.results`` already IS the old engine's output, so this diffs
 new-engine output against the recorded old verdict directly. Signals are
 rebuilt per-AnalyzerReport from the CaseAnalyzerJob ledger (a coarser
@@ -49,7 +53,7 @@ def _signals_for(case):
 
 
 class Command(BaseCommand):
-    help = "Backtest the new scoring engine against stored case verdicts (read-only)."
+    help = "Approximate backtest (analyzer reports only). Prefer score_replay."
 
     def add_arguments(self, parser):
         parser.add_argument("--road", choices=["mail", "ioc", "all"], default="all")

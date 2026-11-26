@@ -1,0 +1,126 @@
+"""score_replay: replay the live scoring path on stored cases without keeping a write."""
+import csv
+import io
+import os
+import tempfile
+from unittest.mock import patch
+
+from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.test import TestCase
+from django.utils import timezone
+
+from ai_model.models import LabelRecord
+from case_handler.models import Case, CaseHasNonFileIocs, Result
+from cortex_job.models import Analyzer, AnalyzerReport
+from ip_process.models import IP
+from score_process import replay
+
+
+def make_ioc_case(n, stored=Result.SAFE, level="malicious", analyst=None):
+    user = get_user_model().objects.get_or_create(username="replay_u")[0]
+    ip = IP.objects.create(address=f"203.0.113.{n}")
+    analyzer = Analyzer.objects.get_or_create(
+        name="ReplayAbuse", defaults={"analyzer_cortex_id": "ReplayAbuse", "weight": 1})[0]
+    AnalyzerReport.objects.create(
+        cortex_job_id=f"rp{n}", type="ip", status="Success", analyzer=analyzer, ip=ip,
+        level=level, confidence=9, score=9 if level == "malicious" else 1,
+        report_summary={"taxonomies": [{"level": level, "value": "x"}]},
+        report_taxonomy={}, report_full={})
+    case = Case.objects.create(description="", reporter=user, results=stored)
+    case.nonFileIocs = CaseHasNonFileIocs.objects.create(case=case, ip=ip)
+    case.save()
+    if analyst:
+        LabelRecord.objects.create(
+            case=case, source="analyst_verdict", source_ref=f"t{n}", label=analyst,
+            label_class="x", trust=1.0, observed_at=timezone.now(), status="active",
+            message_id=f"<{n}@x>", message_id_hash=f"{n:064d}")
+    return case
+
+
+def snapshot():
+    """Every row of every table, so a replay that kept any write shows up."""
+    from django.apps import apps
+    return {m._meta.label: sorted(map(str, m.objects.values())) for m in apps.get_models()}
+
+
+class Wilson(TestCase):
+    def test_interval_brackets_the_rate_and_widens_with_few_samples(self):
+        lo, hi = replay.wilson(1, 10)
+        self.assertLess(lo, 0.1)
+        self.assertGreater(hi, 0.1)
+        lo2, hi2 = replay.wilson(100, 1000)
+        self.assertLess(hi2 - lo2, hi - lo)
+
+    def test_no_samples_gives_no_interval(self):
+        self.assertEqual(replay.wilson(0, 0), (None, None))
+
+
+class ReplayCase(TestCase):
+    def test_replay_gives_the_live_verdict_and_keeps_nothing(self):
+        case = make_ioc_case(1, stored=Result.SAFE)
+        before = snapshot()
+        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+            out = replay.replay_case(case.pk)
+        self.assertIsNone(out.error)
+        self.assertEqual(out.replay, Result.DANGEROUS)
+        self.assertEqual(out.stored, Result.SAFE)
+        self.assertEqual(snapshot(), before)   # no row of any table changed (KPIs included)
+        self.assertEqual(callbacks, [])
+
+    def test_a_scoring_error_is_reported_not_hidden(self):
+        case = make_ioc_case(2, stored=Result.SAFE)
+        with patch("score_process.scoring.apply.apply_verdict", side_effect=RuntimeError("boom")):
+            out = replay.replay_case(case.pk)
+        self.assertIsNotNone(out.error)
+        self.assertIn("boom", out.error)
+        self.assertIsNone(out.replay)
+
+    def test_the_road_is_named(self):
+        self.assertEqual(replay.replay_case(make_ioc_case(3).pk).road, "ioc")
+
+
+class Summary(TestCase):
+    def row(self, stored, new, analyst=None, road="mail", error=None):
+        return replay.Row(case_id=1, road=road, stored=stored, replay=new, analyst=analyst,
+                          score=None, error=error)
+
+    def test_drift_ignores_analyst_edited_cases_and_accuracy_uses_only_them(self):
+        rows = [
+            self.row("Safe", "Safe"),
+            self.row("Safe", "Dangerous"),
+            self.row("Dangerous", "Safe", analyst="Dangerous"),   # a missed threat
+            self.row("Dangerous", "Dangerous", analyst="Dangerous"),
+            self.row("Safe", "Dangerous", analyst="Safe"),        # a false alarm
+        ]
+        s = replay.summarise(rows)
+        self.assertEqual(s["drift"]["n"], 2)
+        self.assertEqual(s["drift"]["changed"], 1)
+        self.assertEqual(s["accuracy"]["n"], 3)
+        self.assertEqual(s["accuracy"]["missed_threat"]["k"], 1)
+        self.assertEqual(s["accuracy"]["missed_threat"]["n"], 2)
+        self.assertEqual(s["accuracy"]["false_alarm"]["k"], 1)
+        self.assertEqual(s["accuracy"]["false_alarm"]["n"], 1)
+
+    def test_errors_are_counted_apart_from_both_views(self):
+        s = replay.summarise([self.row("Safe", None, error="x"), self.row("Safe", "Safe")])
+        self.assertEqual(s["errors"], 1)
+        self.assertEqual(s["drift"]["n"], 1)
+
+
+class Command(TestCase):
+    def test_command_prints_both_views_and_writes_the_disagreements(self):
+        make_ioc_case(4, stored=Result.SAFE)                        # drift: Safe -> Dangerous
+        make_ioc_case(5, stored=Result.SAFE, analyst=Result.DANGEROUS)  # replay agrees with analyst
+        make_ioc_case(6, stored=Result.DANGEROUS, level="benign", analyst=Result.DANGEROUS)  # missed threat
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "r.csv")
+            call_command("score_replay", "--csv", path, stdout=out)
+            rows = list(csv.DictReader(open(path)))
+        text = out.getvalue()
+        self.assertIn("Drift", text)
+        self.assertIn("Accuracy", text)
+        self.assertIn("Missed threats", text)
+        self.assertEqual(sorted(r["kind"] for r in rows), ["accuracy", "drift"])
+        self.assertEqual(Case.objects.filter(results=Result.SAFE).count(), 2)  # nothing was kept

@@ -126,6 +126,24 @@ class ConnectorsApiTest(APITestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("api_key", response.json()["errors"])
 
+    def test_config_put_stores_the_secret_encrypted_when_there_is_no_vault(self):
+        import os
+        from cryptography.fernet import Fernet
+        from settings.models import StoredSecret
+        from suspicious import secrets as sec
+        sec._CACHE.clear()
+        self.addCleanup(sec._CACHE.clear)
+        with mock.patch.dict(os.environ, {"VAULT_ADDR": "", "SECRETS_MASTER_KEY": Fernet.generate_key().decode()}):
+            response = self.client.put(
+                "/api/connectors/dummy/config/",
+                {"url": "http://x", "api_key": "topsecret"}, format="json",
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["config"]["api_key"], "********")
+            self.assertEqual(sec.get_secret("integrations.dummy.api_key"), "topsecret")
+        row = StoredSecret.objects.get(key="integrations.dummy.api_key")
+        self.assertNotIn("topsecret", row.ciphertext)
+
     def test_config_put_secret_write_failure_returns_502(self):
         with mock.patch("api.views.connectors.set_secret",
                         side_effect=RuntimeError("permission denied")):

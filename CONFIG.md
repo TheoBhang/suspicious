@@ -873,6 +873,25 @@ the dev/CI fallback for both.
   schema check requires them, and the real values are overlaid from Vault when
   `VAULT_ADDR` is set.
 
+- **Secrets without Vault (encrypted in the database).** Where Vault is not run (for example
+  Kubernetes), set `SECRETS_MASTER_KEY` instead and the Settings UI can change connector secrets
+  (TheHive and Watcher API keys, and the other connector secrets). The value is stored in
+  `settings.StoredSecret`, encrypted with Fernet (AES-128-CBC and HMAC-SHA256), with the secret's own
+  name sealed inside the ciphertext so a row copied onto another key does not decrypt. Rules:
+  - Vault wins when `VAULT_ADDR` is set; with neither Vault nor a master key, secrets stay read-only
+    from `settings.json`, as before (the UI answers 409 "secret store not configured").
+  - A stored value beats the `settings.json` value; with no stored row, `settings.json` is used, so
+    nothing changes until the first UI save. If the database is unreachable the `settings.json` value
+    is used, with a warning.
+  - `app.secret_key` and `database.password` are never kept in the database.
+  - Generate a key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+    and give it to every backend pod (a Kubernetes Secret, not the ConfigMap or `settings.json`).
+    **Losing the key loses the stored values** (re-enter them in the UI); back it up like a password.
+  - Rotation: set `SECRETS_MASTER_KEY=<new>,<old>`. Reads accept both; a value is re-encrypted with the
+    new key the next time it is saved. Drop `<old>` once every secret has been saved again.
+  - A wrong key stops the read with an error naming the secret, never its value. A change made in the UI
+    reaches the other pods within 60 seconds.
+
 See [deployment/VAULT.md](./deployment/VAULT.md) for the secret map, prod
 bring-up order, and the dev/CI path.
 

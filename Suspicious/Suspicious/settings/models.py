@@ -236,3 +236,18 @@ class ListChangeLog(models.Model):
 
     def __str__(self):
         return f"{self.action} {self.section}:{self.value}"
+
+
+class StoredSecret(models.Model):
+    """A secret kept in the database, encrypted with ``SECRETS_MASTER_KEY``.
+
+    Used when no Vault is configured. The ciphertext also seals the secret's own name,
+    so a row copied onto another key does not decrypt. Never shown in the admin or the API.
+    """
+
+    key = models.CharField(max_length=200, unique=True)
+    ciphertext = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.key

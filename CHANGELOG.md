@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Connector secrets can be saved from the UI without Vault.** Set `SECRETS_MASTER_KEY` and the secrets are stored encrypted in the database (`StoredSecret`, migration `settings` 0015). Vault still wins when configured; nothing changes until a secret is saved. See CONFIG.md, "Runtime config + secrets".
 - `fixture_engine` connector (dev and tests only, inert until `confirm_fixture` is true): an instant fake analysis engine whose verdicts come from markers in the value, plus a "Running without Cortex (dev)" recipe in `docs/components/backend/connectors.md`.
 - `cortex` connector (category Analysis, provides `analysis`): Cortex config, health and the 60 s analyzer sync now live in the connector framework, using the existing `integrations.cortex` section. `Analyzer` gains a `source` column; disabling the last enabled analysis connector needs `force: true` (409 `last_analysis_connector` otherwise).
 - Settings "AI model" card for Admins, shown while the `ai_model` connector is enabled: connector

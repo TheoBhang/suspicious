@@ -64,6 +64,7 @@ python manage.py createsuperuser
 | `elasticsearch` | Search and indexing |
 | `rustfs` | S3-compatible object storage (artifacts/attachments, AI datasets and model bundles). Provider is selectable (`storage.provider`: `s3` or `gcs`) |
 | `cortex` | Analyzer execution engine (YARA, sandbox, metadata); reports back via a bearer-secret webhook |
+| `docker_policy_cortex` / `docker_proxy_cortex` | Cortex's only route to the Docker daemon: the policy service (`deployment/docker/docker-policy-proxy/`, `DOCKER_POLICY_MODE` log or enforce) reads container create and image pull bodies and refuses privileged containers, binds outside the job directory and images not in the analyzer catalogs; it sits in front of the socket proxy on its own internal network |
 | `chromadb` | Vector DB for semantic similarity search |
 | `mail_renderer` | Isolated headless Chromium (`mail-renderer/`) that draws the mail preview PNG from sanitised HTML; internal network shared only with Django and Celery, no route out |
 | `ai_inference` | AIMailAnalyzer model server (FastAPI, profile `ai`). Reachable as `http://ai_inference:8090` on `suspicious_net`, no host port; also on the `storage` network, to fetch training datasets and bundles from RustFS through presigned URLs (`AI_BUNDLE_HOSTS`). Holds the vectorizer + classifier weights; the `ai_model` connector calls its token-protected `/v2` API (`AI_INFERENCE_TOKEN`). `make` targets enable the profile; plain compose needs `--profile ai` |

@@ -173,13 +173,20 @@ Beyond the create body, the policy also:
   before the label existed are refused after `enforce`: switch while no analyzer is running;
 - allows only the `HostConfig` fields an analyzer run sends (binds, network mode, resource limits,
   `CapDrop`, `AutoRemove`) and refuses `NetworkingConfig.EndpointsConfig`, `MaskedPaths` and
-  `ReadonlyPaths`, and non-ASCII JSON keys;
+  `ReadonlyPaths`, non-ASCII JSON keys, and any security option except `no-new-privileges`;
 - refuses a body on every request except container create, and a create sent as a form;
-- cuts off a client that stalls while sending a request (15 s).
+- cuts off a client that stalls while sending a request (15 s), and closes the Docker connection when
+  Cortex drops a long wait or logs call;
+- re-reads the catalogs when a file changes in place (as `make init` does when it downloads over them). A
+  catalog replaced by rename stays the old file inside a single-file bind mount, for Cortex as well: run
+  `docker compose up -d --force-recreate docker_policy_cortex cortex` after replacing catalogs that way.
+  The analyzer and responder catalogs are both read.
 
 It exits at start if a catalog cannot be read, or holds no image, instead of running with an empty
 allow-list. Bind sources are resolved through symlinks (the job directory is mounted read-only into the
-policy container). Known limits: a symlink swapped between the check and the daemon's mount is not
+policy container), and a path the policy cannot inspect is refused. On an SELinux host Cortex's `:Z` mount
+is private to Cortex: label the job directory mounts of both services `:z` so the policy can read it, or it
+will refuse every bind. Known limits: a symlink swapped between the check and the daemon's mount is not
 caught, and an allowed analyzer still runs as root in its own container with outbound network access on
 the default bridge.
 

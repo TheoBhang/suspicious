@@ -85,7 +85,7 @@ volumes and networks once and pulls service definitions from the base files with
 | File | Role |
 |---|---|
 | `docker-compose.yml` | Main composition: image tags, container names, dependencies, volumes, networks |
-| `compose_apps.yaml` | Base definitions for suspicious, suspicious_ui, celery, beat, cortex, docker_proxy_cortex, feeder, mail_renderer, ai_inference, vault |
+| `compose_apps.yaml` | Base definitions for suspicious, suspicious_ui, celery, beat, cortex, docker_proxy_cortex, docker_policy_cortex, feeder, mail_renderer, ai_inference, vault |
 | `compose_databases.yaml` | Base definitions for MariaDB (and replica), Redis, Elasticsearch, ChromaDB, RustFS |
 | `compose_reverse_proxy.yaml` | Traefik |
 | `docker-compose.override.yml` | Auto-loaded; only `build:` deltas so contributors run images built from their working tree |
@@ -115,7 +115,8 @@ feeder, Vault, external peers). The others segment the stack:
 | `cortex` | no | Cortex and Elasticsearch: Django and Celery |
 | `renderer` | yes | `mail_renderer`: Django and Celery, no route out |
 | `chroma_internal` | yes | ChromaDB and its proxy |
-| `docker_cortex` | yes | Cortex and `docker_proxy_cortex` (restricted Docker socket access) |
+| `docker_cortex` | yes | Cortex and `docker_policy_cortex`, which filters what Cortex may ask the Docker daemon |
+| `docker_upstream` | yes | `docker_policy_cortex` and `docker_proxy_cortex` (the socket proxy) only; Cortex is not on it |
 | `reverse_network` | no | Traefik and the services it publishes |
 
 `make network-check` verifies this membership against Docker.

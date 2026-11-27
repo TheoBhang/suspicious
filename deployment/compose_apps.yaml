@@ -313,16 +313,22 @@ services:
       DOCKER_POLICY_MODE: "${DOCKER_POLICY_MODE:-log}"
       DOCKER_POLICY_UPSTREAM: "docker-proxy-upstream:2375"
       DOCKER_POLICY_JOB_DIR: "${CORTEX_PATH}/jobs"
-      DOCKER_POLICY_CATALOGS: "/catalogs/custom.json,/catalogs/public.json"
+      DOCKER_POLICY_CATALOGS: "/catalogs/custom.json,/catalogs/public.json,/catalogs/responders.json"
       DOCKER_POLICY_EXTRA_IMAGES: "${DOCKER_POLICY_EXTRA_IMAGES:-}"
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - "${DOCKER_POLICY_PATH:-./docker/docker-policy-proxy}/docker_policy_proxy.py:/app/docker_policy_proxy.py:ro"
       - "${CUSTOM_ANALYZERS_PATH}/analyzers.json:/catalogs/custom.json:ro"
       - "${CORTEX_PATH}/Cortex-Analyzers-Public/analyzers/analyzers.json:/catalogs/public.json:ro"
+      - "${CORTEX_PATH}/Cortex-Analyzers-Public/responders/responders.json:/catalogs/responders.json:ro"
       # Same path as in Cortex, read-only: lets the policy resolve symlinks inside a job directory.
       - "${CORTEX_PATH}/jobs:${CORTEX_PATH}/jobs:ro"
     mem_limit: 128m
+    logging:                   # one line per refused or created request; keep the file small
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     cap_drop:
       - ALL
     security_opt:

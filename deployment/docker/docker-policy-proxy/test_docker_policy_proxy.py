@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import os
 import tempfile
@@ -7,7 +8,14 @@ from unittest.mock import patch
 
 import docker_policy_proxy as dpp
 
-JOBS = "/srv/cortex/jobs"
+import atexit
+import shutil
+
+_TMP = tempfile.mkdtemp()
+atexit.register(shutil.rmtree, _TMP, True)
+JOBS = os.path.join(_TMP, "jobs")
+for _d in ("job1", "j"):
+    os.makedirs(os.path.join(JOBS, _d))
 IMAGES = {"cortexneurons/virustotal_3_1:3.1", "mailheaderanalyzer:local"}
 
 
@@ -132,6 +140,28 @@ class CreatePolicy(unittest.TestCase):
                 "PidsLimit": 100, "ReadonlyRootfs": True}
         self.assertEqual(check(create(HostConfig=host)), [])
 
+    def test_a_bind_source_that_does_not_exist_is_refused(self):
+        self.assertTrue(check(create(HostConfig={"Binds": [f"{JOBS}/nope:/job"]})))
+
+    def test_a_path_the_policy_cannot_inspect_is_refused(self):
+        with patch.object(dpp.os.path, "realpath", side_effect=PermissionError("denied")):
+            self.assertTrue(check(create(HostConfig={"Binds": [f"{JOBS}/job1:/job"]})))
+
+    def test_an_unreadable_directory_in_the_path_is_refused(self):
+        if os.geteuid() == 0:
+            self.skipTest("root can read everything")
+        with tempfile.TemporaryDirectory() as root:
+            jobs = os.path.join(root, "jobs")
+            hidden = os.path.join(jobs, "a")
+            os.makedirs(os.path.join(hidden, "x"))
+            os.symlink("/", os.path.join(hidden, "input"))
+            os.chmod(hidden, 0)
+            try:
+                bad = dpp.evaluate_create(create(HostConfig={"Binds": [f"{hidden}/input:/m"]}), IMAGES, jobs)
+            finally:
+                os.chmod(hidden, 0o700)
+        self.assertTrue(bad)
+
     def test_a_symlink_in_the_job_directory_cannot_escape_it(self):
         with tempfile.TemporaryDirectory() as root:
             jobs = os.path.join(root, "jobs")
@@ -141,6 +171,15 @@ class CreatePolicy(unittest.TestCase):
             bad = dpp.evaluate_create(create(HostConfig={"Binds": [f"{jobs}/link:/job"]}), IMAGES, jobs)
         self.assertEqual(ok, [])
         self.assertTrue(bad)
+
+    def test_only_no_new_privileges_is_allowed_as_a_security_option(self):
+        for ok in ([], ["no-new-privileges"], ["no-new-privileges:true"], ["no-new-privileges=true"]):
+            with self.subTest(ok=ok):
+                self.assertEqual(check(create(HostConfig={"SecurityOpt": ok})), [])
+        for bad in (['seccomp={"defaultAction":"SCMP_ACT_ALLOW"}'], ["apparmor=custom"],
+                    ["label=type:spc_t"], ["systempaths=unconfined"], ["no-new-privileges", "seccomp=x"]):
+            with self.subTest(bad=bad):
+                self.assertTrue(check(create(HostConfig={"SecurityOpt": bad})))
 
     def test_harmless_hostconfig_fields_pass(self):
         host = {"AutoRemove": False, "Memory": 1 << 30, "NetworkMode": "default", "CapDrop": ["ALL"]}
@@ -228,6 +267,23 @@ class Catalog(unittest.TestCase):
         self.assertEqual(got, {"x/one:1", "y/two:latest", "z/three:9"})
 
 
+    def test_the_image_set_follows_a_catalog_that_changes_in_place(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            with open(path, "w") as fh:
+                json.dump([{"dockerImage": "x/one:1"}], fh)
+            cfg = dpp.Config(mode="log", upstream_host="h", upstream_port=1, job_dir=JOBS,
+                             images=dpp.load_allowed_images([path]), catalogs=[path])
+            self.assertEqual(cfg.current_images(), {"x/one:1"})
+            with open(path, "w") as fh:
+                json.dump([{"dockerImage": "x/one:1"}, {"dockerImage": "x/two:2"}], fh)
+            os.utime(path, (1, 2_000_000_000))   # a distinct mtime, whatever the clock resolution
+            self.assertEqual(cfg.current_images(), {"x/one:1", "x/two:2"})
+            with open(path, "w") as fh:
+                fh.write("not json")             # a broken refresh keeps the last good set
+            os.utime(path, (1, 2_000_000_001))
+            self.assertEqual(cfg.current_images(), {"x/one:1", "x/two:2"})
+
     def test_strict_mode_refuses_a_missing_or_empty_catalog(self):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(ValueError):
@@ -244,6 +300,7 @@ class Catalog(unittest.TestCase):
 class Server(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.seen = []
+        self.upstream_closed = asyncio.Event()
 
         async def upstream(reader, writer):
             head = await reader.readuntil(b"\r\n\r\n")
@@ -261,11 +318,19 @@ class Server(unittest.IsolatedAsyncioTestCase):
                     payload = json.dumps(doc).encode()
                     if first.endswith("HTTP/1.1"):   # the real daemon chunks HTTP/1.1 answers
                         writer.write(b"HTTP/1.1 %d X\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n%x\r\n%s\r\n0\r\n\r\n" % (code, len(payload), payload))
-                    else:
-                        writer.write(b"HTTP/1.0 %d X\r\nContent-Length: %d\r\n\r\n" % (code, len(payload)) + payload)
+                    else:   # head and body in separate segments, like a real daemon behind a proxy
+                        writer.write(b"HTTP/1.0 %d X\r\nContent-Length: %d\r\n\r\n" % (code, len(payload)))
+                        await writer.drain()
+                        await asyncio.sleep(0.05)
+                        writer.write(payload)
                     await writer.drain()
                     writer.close()
                     return
+            if first.startswith("POST /containers/mine/wait"):   # a container that never exits
+                await reader.read()                              # until the proxy closes this connection
+                self.upstream_closed.set()
+                writer.close()
+                return
             writer.write(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
             await writer.drain()
             writer.close()
@@ -389,6 +454,26 @@ class Server(unittest.IsolatedAsyncioTestCase):
     async def test_container_endpoints_are_only_logged_in_log_mode(self):
         out = await self.request("log", b"DELETE /containers/other HTTP/1.1\r\nHost: d\r\n\r\n")
         self.assertTrue(out.startswith(b"HTTP/1.1 201"), out)
+
+    async def test_a_client_that_leaves_frees_the_upstream_connection(self):
+        cfg = dpp.Config(mode="enforce", upstream_host="127.0.0.1", upstream_port=self.up_port,
+                         job_dir=JOBS, images=IMAGES)
+        srv = await asyncio.start_server(lambda r, w: dpp.handle(r, w, cfg), "127.0.0.1", 0)
+        reader, writer = await asyncio.open_connection("127.0.0.1", srv.sockets[0].getsockname()[1])
+        writer.write(b"POST /containers/mine/wait HTTP/1.1\r\nHost: d\r\n\r\n")
+        await writer.drain()
+        await asyncio.sleep(0.3)           # the request is in flight, the container has not exited
+        writer.close()                     # Cortex gives up
+        await asyncio.wait_for(self.upstream_closed.wait(), 3)
+        srv.close()
+        await srv.wait_closed()
+
+    async def test_a_ping_that_is_allowed_is_not_logged(self):
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            await self.request("enforce", b"GET /_ping HTTP/1.1\r\nHost: d\r\n\r\n")
+        self.assertEqual(buf.getvalue(), "")
 
     async def test_a_stalled_request_is_cut_off(self):
         with patch.object(dpp, "READ_TIMEOUT", 0.3):

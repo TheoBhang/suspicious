@@ -107,8 +107,14 @@ def _bind_problem(bind, job_dir):
     if not posixpath.normpath(source).startswith(root + "/"):
         return f"bind source {source!r} is not a directory inside the job directory {root}"
     # Resolve symlinks too (the policy container mounts the job directory read-only at the same path):
-    # a link created inside the job directory must not point the bind somewhere else.
-    if not os.path.realpath(source).startswith(os.path.realpath(root) + "/"):
+    # a link created inside the job directory must not point the bind somewhere else. strict=True: a
+    # component the policy cannot inspect (a directory Cortex made unreadable, an SELinux label, a path
+    # that does not exist) is refused. Non-strict realpath would take it for a plain directory.
+    try:
+        real, real_root = os.path.realpath(source, strict=True), os.path.realpath(root, strict=True)
+    except OSError as exc:
+        return f"bind source {source!r} cannot be resolved ({exc.__class__.__name__}): refused"
+    if not real.startswith(real_root + "/"):
         return f"bind source {source!r} resolves outside the job directory {root}"
     return None
 
@@ -121,6 +127,7 @@ SAFE_NETWORKS = ("", "default", "bridge", "none")
 ALLOWED_HOSTCONFIG = {"binds", "networkmode", "autoremove", "capdrop", "memory", "memoryswap",
                       "memoryreservation", "nanocpus", "cpushares", "cpuperiod", "cpuquota",
                       "cpusetcpus", "pidslimit", "readonlyrootfs", "init", "ulimits"}
+ALLOWED_SECURITYOPT = {"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"}
 JUDGED_ELSEWHERE = {"privileged", "runtime", "securityopt"}
 UNMASKING = ("maskedpaths", "readonlypaths")   # an empty list here removes the default masking
 
@@ -148,8 +155,8 @@ def evaluate_create(body, images, job_dir):
     if host.get("runtime") not in (None, "", "runc"):
         problems.append(f"Runtime {host['runtime']!r} is refused")
     for opt in host.get("securityopt") or []:
-        if "unconfined" in str(opt).lower() or "disable" in str(opt).lower():
-            problems.append(f"SecurityOpt {opt!r} weakens confinement")
+        if str(opt).lower() not in ALLOWED_SECURITYOPT:
+            problems.append(f"SecurityOpt {opt!r} is refused (only no-new-privileges is allowed)")
     for field in UNMASKING:
         if host.get(field) is not None:
             problems.append(f"HostConfig.{field} is set")
@@ -212,6 +219,17 @@ def summarise_create(body):
     return keep
 
 
+def _stamp_of(paths):
+    out = []
+    for path in paths:
+        try:
+            st = os.stat(path)
+            out.append((path, st.st_mtime_ns, st.st_ino))
+        except OSError:
+            out.append((path, None, None))
+    return tuple(out)
+
+
 @dataclasses.dataclass
 class Config:
     mode: str
@@ -219,6 +237,29 @@ class Config:
     upstream_port: int
     job_dir: str
     images: set
+    catalogs: tuple = ()
+    extra: tuple = ()
+    stamp: object = dataclasses.field(default=None, repr=False)
+
+    def current_images(self):
+        """The image set, re-read when a catalog file changed in place (mtime or inode). A refresh that
+        cannot be read keeps the last good set. A file replaced by rename is still the old inode inside
+        a single-file bind mount: recreate the service after replacing catalogs that way."""
+        if not self.catalogs:
+            return self.images
+        stamp = _stamp_of(self.catalogs)
+        if self.stamp is None:
+            self.stamp = stamp
+        elif stamp != self.stamp:
+            self.stamp = stamp
+            try:
+                fresh = load_allowed_images(self.catalogs, self.extra, strict=True)
+            except ValueError as exc:
+                log("catalog_reload_failed", error=str(exc))
+                return self.images
+            self.images = fresh
+            log("catalog_reloaded", images=len(fresh))
+        return self.images
 
 
 async def read_chunked(reader):
@@ -250,17 +291,28 @@ async def refuse(writer, status, reason):
 CONTAINER_PATH = re.compile(rf"/containers/({CID})(?:/[a-z]+)?")
 
 
+async def _read_all(reader, limit):
+    buf = b""
+    while len(buf) < limit:
+        chunk = await reader.read(65536)
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
 async def owned(cfg, cid):
     """True when the container carries our label, or does not exist (nothing to protect). The label is
     read from the daemon through the upstream proxy, so it survives a restart of this service."""
+    writer = None
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(cfg.upstream_host, cfg.upstream_port), READ_TIMEOUT)
-        # HTTP/1.0: the daemon then answers with a Content-Length body and no chunked framing to decode.
+        # HTTP/1.0: the daemon then answers with a Content-Length body and no chunked framing to decode,
+        # and closes the connection, so reading to EOF gives the whole answer.
         writer.write(f"GET /containers/{cid}/json HTTP/1.0\r\nHost: docker\r\n\r\n".encode())
         await writer.drain()
-        raw = await asyncio.wait_for(reader.read(MAX_BODY), READ_TIMEOUT)
-        writer.close()
+        raw = await asyncio.wait_for(_read_all(reader, MAX_BODY), READ_TIMEOUT)
         head, _, body = raw.partition(b"\r\n\r\n")
         status = int(head.split(b" ", 2)[1])
         if status == 404:
@@ -271,6 +323,9 @@ async def owned(cfg, cid):
         return labels.get(LABEL) == "1"
     except (OSError, ValueError, IndexError, asyncio.TimeoutError):
         return False   # cannot tell: refuse
+    finally:
+        if writer is not None:
+            writer.close()
 
 
 def label_create(parsed):
@@ -286,6 +341,14 @@ async def pipe(src, dst):
         while chunk := await src.read(65536):
             dst.write(chunk)
             await dst.drain()
+    except (ConnectionError, asyncio.CancelledError):
+        pass
+
+
+async def watch_client(reader):
+    try:
+        while await reader.read(65536):
+            pass
     except (ConnectionError, asyncio.CancelledError):
         pass
 
@@ -325,7 +388,7 @@ async def handle(reader, writer, cfg):
                 parsed = parse_json(body or b"null")
             except ValueError:
                 parsed = None
-        problems = evaluate_request(method, url.path, url.query, parsed, cfg.images, cfg.job_dir,
+        problems = evaluate_request(method, url.path, url.query, parsed, cfg.current_images(), cfg.job_dir,
                                     raw_body=body, content_type=names.get("content-type", ""))
         match = CONTAINER_PATH.fullmatch(re.sub(r"^/v\d+(\.\d+)?", "", url.path))
         if not problems and match and match.group(1) != "create" and not await owned(cfg, match.group(1)):
@@ -334,7 +397,8 @@ async def handle(reader, writer, cfg):
         fields = {"method": method, "path": url.path, "verdict": verdict, "problems": problems}
         if url.path.endswith("/containers/create"):
             fields["create"] = summarise_create(parsed)
-        log("request", **fields)
+        if not (verdict == "allow" and url.path.endswith("/_ping")):   # the healthcheck, every 10 s
+            log("request", **fields)
         if verdict == "deny":
             return await refuse(writer, 403, "; ".join(problems))
         if re.sub(r"^/v\d+(\.\d+)?", "", url.path) == "/containers/create" and isinstance(parsed, dict):
@@ -350,8 +414,15 @@ async def handle(reader, writer, cfg):
         up_writer.write(("\r\n".join(out) + "\r\n\r\n").encode("latin-1") + body)
         await up_writer.drain()
         # One request per connection: only the request judged above is forwarded. Anything the client
-        # sends after it (a pipelined second request) is never read, let alone passed on.
-        await pipe(up_reader, writer)
+        # sends after it (a pipelined second request) is read and thrown away, never passed on. When the
+        # client goes away (Cortex drops a long wait or logs call) the upstream connection is closed too,
+        # instead of staying open until the container exits. The only client is Cortex's docker-java,
+        # which keeps the connection open while it waits and never half-closes.
+        relay = asyncio.ensure_future(pipe(up_reader, writer))
+        gone = asyncio.ensure_future(watch_client(reader))
+        await asyncio.wait({relay, gone}, return_when=asyncio.FIRST_COMPLETED)
+        for task in (relay, gone):
+            task.cancel()
     except OSError as exc:
         log("upstream_error", error=str(exc))
     finally:
@@ -371,7 +442,8 @@ async def serve():
         images = load_allowed_images(catalogs, extra, strict=True)
     except ValueError as exc:
         sys.exit(f"docker policy: {exc}")   # never start with a catalog we could not read
-    cfg = Config(mode, host, int(port or 2375), os.environ["DOCKER_POLICY_JOB_DIR"], images)
+    cfg = Config(mode, host, int(port or 2375), os.environ["DOCKER_POLICY_JOB_DIR"], images,
+                 catalogs=tuple(catalogs), extra=tuple(extra), stamp=_stamp_of(catalogs))
     server = await asyncio.start_server(lambda r, w: handle(r, w, cfg), "0.0.0.0", 2375, limit=1 << 16)
     log("started", mode=mode, upstream=f"{host}:{cfg.upstream_port}", job_dir=cfg.job_dir,
         images=len(cfg.images))

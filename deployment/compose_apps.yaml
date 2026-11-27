@@ -316,6 +316,11 @@ services:
     # An OOM kill fails the job ("worker exited with code -9"). One uvicorn worker only (the
     # image's CMD): the job controller's state lives in that process.
     mem_limit: ${AI_INFERENCE_MEM_LIMIT:-8g}
+    # Runs as a non-root user and needs no capability.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       - suspicious_network
       - storage   # RustFS, for the presigned training dataset and bundle files
@@ -386,8 +391,17 @@ services:
     image: hashicorp/vault:1.18
     init: true
     restart: always
+    # Everything dropped, then only what the image's entrypoint needs: it chowns its directories, runs
+    # vault as the `vault` user and sets the mlock file capability on the binary (SETFCAP), which Vault
+    # needs to lock secrets out of swap. No no-new-privileges: that blocks the file capability.
+    cap_drop:
+      - ALL
     cap_add:
       - IPC_LOCK
+      - CHOWN
+      - SETGID
+      - SETUID
+      - SETFCAP
     ports:
       - "127.0.0.1:${VAULT_PORT:-8200}:8200"
     environment:

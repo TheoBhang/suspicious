@@ -152,6 +152,23 @@ container. Treat Cortex as high risk: run it on a host where the Docker daemon
 is rootless, or run analyzers on a dedicated host, if the platform handles
 hostile content from untrusted reporters.
 
+Every service in the stack drops all Linux capabilities (`cap_drop: ALL`) and adds back only what its
+image needs, each tested on the dev stack with the capability set it ships with:
+
+| Service | Added back | Why |
+|---|---|---|
+| `elasticsearch`, `rustfs`, `ai_inference`, `chromadb`, both Valkey instances | none | run as a non-root user, or as root without needing a privilege |
+| `db_suspicious` (and the replica) | `CHOWN`, `DAC_OVERRIDE`, `SETGID`, `SETUID`, `SYS_NICE` | the entrypoint walks and chowns the data directory (mode 700 subdirectories need `DAC_OVERRIDE`), then runs MariaDB as `mysql` |
+| `chromadb_proxy` (nginx) | `CHOWN`, `SETGID`, `SETUID` | chowns its temp directories, runs workers as `nginx` |
+| `vault` | `IPC_LOCK`, `CHOWN`, `SETGID`, `SETUID`, `SETFCAP` | mlock, chown of its directories, `su-exec`, and the file capability the entrypoint sets on the binary (so no `no-new-privileges` here) |
+| `traefik` | `DAC_OVERRIDE` | reads the TLS key (mode 600, operator-owned) and writes the access log in the bind mounts |
+
+Traefik binds ports 80 and 443 inside its container with no capability, which relies on Docker's default
+`net.ipv4.ip_unprivileged_port_start=0` for containers (Docker 20.10 and later); on a runtime that does not
+set it, add `NET_BIND_SERVICE` to Traefik. `db_suspicious`, `db_suspicious_replica` and the databases now
+also set `no-new-privileges`. If you override one of these services with your own compose file, keep the
+list of what it needs: MariaDB fails to start on an existing data directory without `DAC_OVERRIDE`.
+
 **Required when you upgrade:** if your `traefik.yaml` defines a `providers.docker`
 section, remove it and declare those routes under `traefik/dynamic`. `make deploy`
 stops with a message if the section is present (`scripts/check-traefik-provider.sh`).

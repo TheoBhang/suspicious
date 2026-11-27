@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker rejects the new `connectors.tasks.run_engine_job` task as unregistered; the mail's AI row
   then waits for `fail_stale_jobs` (up to 2 h) and the mail finalises with the AI missing.
 
+### Security
+
+- Every service now drops all Linux capabilities and adds back only what it needs: none for Elasticsearch,
+  RustFS, `ai_inference`, ChromaDB and Valkey; a short list for MariaDB, the ChromaDB nginx proxy, Vault and
+  Traefik (table in `docs/operations/deploy.md`). MariaDB (primary and replica) and `ai_inference` gain
+  `no-new-privileges`. Sec-Gemini roadmap item 3.2.
+
 ### Added
 
 - `fixture_engine` connector (dev and tests only, inert until `confirm_fixture` is true): an instant fake analysis engine whose verdicts come from markers in the value, plus a "Running without Cortex (dev)" recipe in `docs/components/backend/connectors.md`.

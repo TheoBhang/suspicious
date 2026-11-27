@@ -29,7 +29,15 @@ services:
       --innodb-write-io-threads=${INNODB_WRITE_IO_THREADS:-4}"
     volumes:
       - "db_suspicious_data:/var/lib/mysql:Z"
-    cap_add:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:        # the entrypoint chowns the data dir, then runs mariadbd as `mysql`
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
       - SYS_NICE
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
@@ -60,7 +68,15 @@ services:
       --innodb-log-file-size=${INNODB_LOG_FILE_SIZE:-600M}"
     volumes:
       - "db_suspicious_replica_data:/var/lib/mysql:Z"
-    cap_add:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:        # the entrypoint chowns the data dir, then runs mariadbd as `mysql`
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
       - SYS_NICE
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
@@ -102,6 +118,8 @@ services:
       ES_JAVA_OPTS:             "${ES_JAVA_OPTS:--Xms3g -Xmx3g}"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       - cortex
 
@@ -123,6 +141,8 @@ services:
       - "rustfs_data:/data:Z"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       - storage
 
@@ -136,6 +156,8 @@ services:
       ANONYMIZED_TELEMETRY: "False"   # the backend has no outbound route
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     # The server has no authentication: it lives only on an internal network
     # and is reached through chromadb_proxy.
     networks:
@@ -152,6 +174,12 @@ services:
       - "./docker/chroma-proxy/default.conf.template:/etc/nginx/templates/default.conf.template:ro"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:      # the nginx entrypoint chowns its temp dirs, then runs the workers as `nginx`
+      - CHOWN
+      - SETGID
+      - SETUID
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null --header \"X-Chroma-Token: $$CHROMA_TOKEN\" http://127.0.0.1:8000/api/v2/heartbeat || exit 1"]
       interval: 10s
@@ -182,6 +210,8 @@ services:
       REDISCLI_AUTH: "${REDIS_BROKER_PASSWORD:?REDIS_BROKER_PASSWORD is required (run make init)}"   # also authenticates the redis-cli healthcheck
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 6379 ping | grep -q PONG || exit 1"]
       interval: 10s
@@ -210,6 +240,8 @@ services:
       REDISCLI_AUTH: "${REDIS_CACHE_PASSWORD:?REDIS_CACHE_PASSWORD is required (run make init)}"   # also authenticates the redis-cli healthcheck
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 6379 ping | grep -q PONG || exit 1"]
       interval: 10s

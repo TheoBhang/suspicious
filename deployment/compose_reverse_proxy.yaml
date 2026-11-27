@@ -7,6 +7,12 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    # Traefik runs as root in its container but needs no capability of its own, except to read the TLS
+    # key (mode 600, owned by the operator) and write the access log in the bind-mounted directories.
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
     environment:
       DOMAIN_CORP: ${DOMAIN_CORP}
       NO_PROXY: ${NO_PROXY}

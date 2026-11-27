@@ -428,3 +428,23 @@ class CampaignMember(models.Model):
 
     class Meta:
         ordering = ["joined_at", "id"]
+
+
+class ChallengeTriage(models.Model):
+    """What the challenge triage decided for a challenge, and whether it was acted on.
+
+    ``applied`` is False in log mode: the alert went out as before and this row only
+    shows what enforce mode would have done.
+    """
+
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name="challenge_triages")
+    decision = models.CharField(max_length=10)
+    reason_code = models.CharField(max_length=40)
+    ruleset = models.CharField(max_length=20)
+    mode = models.CharField(max_length=10)
+    applied = models.BooleanField(default=False)
+    facts = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]

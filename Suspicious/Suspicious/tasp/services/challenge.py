@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from dashboard.models import UserCasesMonthlyStats
 from connectors.contrib.thehive.challenge import ChallengeToTheHiveService
+from tasp.services.challenge_triage import triage
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,15 @@ class CaseChallengeService:
         _update_case_challenge_stats(self.case.reporter)
 
     def notify(self):
+        try:
+            row = triage(self.case)
+        except Exception as exc:  # noqa: BLE001 -- triage is advice; a failure alerts as before
+            logger.warning("challenge triage failed for case %s: %s", self.case.pk, type(exc).__name__)
+            row = None
+        if row and row.applied:
+            self.logger.info("Challenge for case ID %s left to the analysts (%s); no alert sent",
+                             self.case.id, row.reason_code)
+            return
         send_to_thehive = _load_thehive_config().get("enabled", False)
         mail_header = f"Case ID {self.case.id} challenged by {self.challenger.username}{self._on_behalf()}"
         proposed = getattr(self.case, "challenge_proposed_result", "")

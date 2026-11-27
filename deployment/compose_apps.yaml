@@ -320,6 +320,8 @@ services:
       - "${DOCKER_POLICY_PATH:-./docker/docker-policy-proxy}/docker_policy_proxy.py:/app/docker_policy_proxy.py:ro"
       - "${CUSTOM_ANALYZERS_PATH}/analyzers.json:/catalogs/custom.json:ro"
       - "${CORTEX_PATH}/Cortex-Analyzers-Public/analyzers/analyzers.json:/catalogs/public.json:ro"
+      # Same path as in Cortex, read-only: lets the policy resolve symlinks inside a job directory.
+      - "${CORTEX_PATH}/jobs:${CORTEX_PATH}/jobs:ro"
     mem_limit: 128m
     cap_drop:
       - ALL

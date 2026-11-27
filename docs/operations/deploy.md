@@ -162,6 +162,27 @@ Cortex and that proxy and reads the body of container create and image pull requ
   forwarded per connection, the rest is never read). Docker decodes JSON keys case-insensitively, so
   the body is parsed strictly: a key repeated in any case is refused.
 
+Beyond the create body, the policy also:
+
+- sits alone between Cortex and the raw socket proxy: the proxy is on its own internal network
+  (`docker_upstream`) shared only with the policy, so Cortex cannot skip the policy by using another
+  hostname (`make network-check` asserts it);
+- adds the label `org.thalesgroup.suspicious.cortex-analyzer=1` to every container it lets Cortex create,
+  and lets start, stop, kill, wait, logs, inspect and delete reach only containers with that label, so a
+  compromised Cortex cannot read the environment of, or stop, the stack's own containers. Containers made
+  before the label existed are refused after `enforce`: switch while no analyzer is running;
+- allows only the `HostConfig` fields an analyzer run sends (binds, network mode, resource limits,
+  `CapDrop`, `AutoRemove`) and refuses `NetworkingConfig.EndpointsConfig`, `MaskedPaths` and
+  `ReadonlyPaths`, and non-ASCII JSON keys;
+- refuses a body on every request except container create, and a create sent as a form;
+- cuts off a client that stalls while sending a request (15 s).
+
+It exits at start if a catalog cannot be read, or holds no image, instead of running with an empty
+allow-list. Bind sources are resolved through symlinks (the job directory is mounted read-only into the
+policy container). Known limits: a symlink swapped between the check and the daemon's mount is not
+caught, and an allowed analyzer still runs as root in its own container with outbound network access on
+the default bridge.
+
 The service has a healthcheck (`GET /_ping` through the whole path) and Cortex waits for it; `make deploy`
 starts it before Cortex. The Python image is pinned by digest.
 

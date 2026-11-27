@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import docker_policy_proxy as dpp
 
@@ -100,6 +101,47 @@ class CreatePolicy(unittest.TestCase):
                     dpp.parse_json(raw.encode())
         self.assertEqual(dpp.parse_json(b'{"Image":"a","HostConfig":{"Binds":[]}}')["Image"], "a")
 
+    def test_non_ascii_keys_are_refused_because_go_folds_them_onto_ascii(self):
+        for raw in ('{"Image":"a","Ho\\u017ftConfig":{"Privileged":true}}', '{"\\u212aey":1}'):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    dpp.parse_json(raw.encode())
+
+    def test_networkingconfig_endpoints_are_refused(self):
+        body = create()
+        body["NetworkingConfig"] = {"EndpointsConfig": {"stack_data": {}}}
+        self.assertTrue(check(body))
+        body["NetworkingConfig"] = {"EndpointsConfig": {}}
+        self.assertEqual(check(body), [])
+
+    def test_hostconfig_fields_outside_the_allow_list_are_refused(self):
+        for field, value in [("Tmpfs", {"/x": ""}), ("Links", ["a:b"]), ("CgroupnsMode", "host"),
+                             ("StorageOpt", {"size": "1g"}), ("ExtraHosts", ["a:1.1.1.1"]),
+                             ("OomKillDisable", True)]:
+            with self.subTest(field=field):
+                self.assertTrue(check(create(HostConfig={field: value})))
+
+    def test_unmasking_paths_is_refused_even_when_empty(self):
+        for field in ("MaskedPaths", "ReadonlyPaths"):
+            with self.subTest(field=field):
+                self.assertTrue(check(create(HostConfig={field: []})))
+                self.assertEqual(check(create(HostConfig={field: None})), [])
+
+    def test_resource_limits_and_autoremove_are_allowed(self):
+        host = {"AutoRemove": True, "Memory": 1 << 30, "NanoCpus": 10**9, "CapDrop": ["ALL"],
+                "PidsLimit": 100, "ReadonlyRootfs": True}
+        self.assertEqual(check(create(HostConfig=host)), [])
+
+    def test_a_symlink_in_the_job_directory_cannot_escape_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            jobs = os.path.join(root, "jobs")
+            os.makedirs(os.path.join(jobs, "real"))
+            os.symlink("/etc", os.path.join(jobs, "link"))
+            ok = dpp.evaluate_create(create(HostConfig={"Binds": [f"{jobs}/real:/job"]}), IMAGES, jobs)
+            bad = dpp.evaluate_create(create(HostConfig={"Binds": [f"{jobs}/link:/job"]}), IMAGES, jobs)
+        self.assertEqual(ok, [])
+        self.assertTrue(bad)
+
     def test_harmless_hostconfig_fields_pass(self):
         host = {"AutoRemove": False, "Memory": 1 << 30, "NetworkMode": "default", "CapDrop": ["ALL"]}
         self.assertEqual(check(create(HostConfig=host)), [])
@@ -156,6 +198,20 @@ class RequestPolicy(unittest.TestCase):
                                  "fromImage=cortexneurons%2Fvirustotal_3_1%3A3.1&tag=3.1"), [])
         self.assertTrue(self.ev("POST", "/images/create", "fromImage=x%40sha256%3Aab&tag=1"))
 
+    def test_a_body_is_refused_on_every_endpoint_but_create(self):
+        ok = "fromImage=cortexneurons%2Fvirustotal_3_1&tag=3.1"
+        self.assertEqual(dpp.evaluate_request("POST", "/images/create", ok, None, IMAGES, JOBS, raw_body=b""), [])
+        self.assertTrue(dpp.evaluate_request("POST", "/images/create", ok, None, IMAGES, JOBS,
+                                             raw_body=b"fromSrc=http%3A%2F%2Fevil"))
+        self.assertTrue(dpp.evaluate_request("POST", "/containers/abc/start", "", None, IMAGES, JOBS,
+                                             raw_body=b"{}"))
+
+    def test_a_form_encoded_create_is_refused(self):
+        self.assertTrue(dpp.evaluate_request("POST", "/containers/create", "", create(), IMAGES, JOBS,
+                                             raw_body=b"{}", content_type="application/x-www-form-urlencoded"))
+        self.assertEqual(dpp.evaluate_request("POST", "/containers/create", "", create(), IMAGES, JOBS,
+                                              raw_body=b"{}", content_type="application/json"), [])
+
     def test_path_tricks_are_not_allowed(self):
         self.assertTrue(self.ev("POST", "/containers/../containers/create/../x"))
 
@@ -172,6 +228,19 @@ class Catalog(unittest.TestCase):
         self.assertEqual(got, {"x/one:1", "y/two:latest", "z/three:9"})
 
 
+    def test_strict_mode_refuses_a_missing_or_empty_catalog(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                dpp.load_allowed_images([os.path.join(d, "missing.json")], strict=True)
+            with self.assertRaises(ValueError):          # a directory where the file should be
+                dpp.load_allowed_images([d], strict=True)
+            empty = os.path.join(d, "e.json")
+            with open(empty, "w") as fh:
+                json.dump([], fh)
+            with self.assertRaises(ValueError):
+                dpp.load_allowed_images([empty], strict=True)
+
+
 class Server(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.seen = []
@@ -184,6 +253,19 @@ class Server(unittest.IsolatedAsyncioTestCase):
                     length = int(line.split(b":")[1])
             body = await reader.readexactly(length) if length else b""
             self.seen.append((head, body))
+            first = head.split(b"\r\n")[0].decode()
+            inspect = {"mine": (200, {"Config": {"Labels": {dpp.LABEL: "1"}}}),
+                       "other": (200, {"Config": {"Labels": {}}}), "gone": (404, {"message": "no"})}
+            for name, (code, doc) in inspect.items():
+                if first.startswith(f"GET /containers/{name}/json"):
+                    payload = json.dumps(doc).encode()
+                    if first.endswith("HTTP/1.1"):   # the real daemon chunks HTTP/1.1 answers
+                        writer.write(b"HTTP/1.1 %d X\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n%x\r\n%s\r\n0\r\n\r\n" % (code, len(payload), payload))
+                    else:
+                        writer.write(b"HTTP/1.0 %d X\r\nContent-Length: %d\r\n\r\n" % (code, len(payload)) + payload)
+                    await writer.drain()
+                    writer.close()
+                    return
             writer.write(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
             await writer.drain()
             writer.close()
@@ -241,7 +323,9 @@ class Server(unittest.IsolatedAsyncioTestCase):
         good = await self.request("enforce", self.post(create(), chunked=True))
         self.assertTrue(good.startswith(b"HTTP/1.1 201"), good)
         head, body = self.seen[0]
-        self.assertEqual(json.loads(body), create())
+        sent = json.loads(body)
+        self.assertEqual(sent.pop("Labels"), {dpp.LABEL: "1"})   # the analyzer label is the only change
+        self.assertEqual(sent, create())
         self.assertNotIn(b"chunked", head.lower())
         bad = await self.request("enforce", self.post(create(Image="alpine"), chunked=True))
         self.assertTrue(bad.startswith(b"HTTP/1.1 403"), bad)
@@ -272,6 +356,54 @@ class Server(unittest.IsolatedAsyncioTestCase):
         head = b"POST /containers/create HTTP/1.1\r\nHost: d\r\nContent-Length: %d\r\n\r\n" % len(raw)
         out = await self.request("enforce", head + raw)
         self.assertTrue(out.startswith(b"HTTP/1.1 403"), out)
+
+    async def test_an_allowed_create_gets_the_analyzer_label(self):
+        await self.request("log", self.post(create(Labels={"a": "b"})))
+        sent = json.loads(self.seen[0][1])
+        self.assertEqual(sent["Labels"], {"a": "b", dpp.LABEL: "1"})
+        self.assertEqual(sent["Image"], create()["Image"])
+
+    async def test_a_lower_case_labels_key_is_replaced_not_duplicated(self):
+        body = create()
+        body["labels"] = {"x": "y"}
+        await self.request("log", self.post(body))
+        sent = json.loads(self.seen[0][1])
+        self.assertNotIn("labels", sent)
+        self.assertEqual(sent["Labels"], {"x": "y", dpp.LABEL: "1"})
+
+    async def test_container_endpoints_only_reach_labelled_containers(self):
+        def call(cid, method="POST", tail="start"):
+            return f"{method} /containers/{cid}/{tail} HTTP/1.1\r\nHost: d\r\n\r\n".encode()
+        out = await self.request("enforce", call("other"))
+        self.assertTrue(out.startswith(b"HTTP/1.1 403"), out)
+        self.assertEqual([h.split(b"\r\n")[0] for h, _ in self.seen],
+                         [b"GET /containers/other/json HTTP/1.0"])            # only the inspect was sent
+        self.seen.clear()
+        out = await self.request("enforce", call("mine"))
+        self.assertTrue(out.startswith(b"HTTP/1.1 201"), out)
+        self.assertEqual(len(self.seen), 2)                                   # inspect, then the start
+        self.seen.clear()
+        out = await self.request("enforce", call("gone"))                     # nothing to protect
+        self.assertTrue(out.startswith(b"HTTP/1.1 201"), out)
+
+    async def test_container_endpoints_are_only_logged_in_log_mode(self):
+        out = await self.request("log", b"DELETE /containers/other HTTP/1.1\r\nHost: d\r\n\r\n")
+        self.assertTrue(out.startswith(b"HTTP/1.1 201"), out)
+
+    async def test_a_stalled_request_is_cut_off(self):
+        with patch.object(dpp, "READ_TIMEOUT", 0.3):
+            cfg = dpp.Config(mode="enforce", upstream_host="127.0.0.1", upstream_port=self.up_port,
+                             job_dir=JOBS, images=IMAGES)
+            srv = await asyncio.start_server(lambda r, w: dpp.handle(r, w, cfg), "127.0.0.1", 0)
+            reader, writer = await asyncio.open_connection("127.0.0.1", srv.sockets[0].getsockname()[1])
+            writer.write(b"GET /_ping HTTP/1.1\r\nHost: d\r\n")     # never finishes the head
+            await writer.drain()
+            data = await asyncio.wait_for(reader.read(), 3)
+            writer.close()
+            srv.close()
+            await srv.wait_closed()
+        self.assertTrue(data == b"" or data.startswith(b"HTTP/1.1 400"), data)
+        self.assertEqual(self.seen, [])
 
     async def test_unparseable_create_body_is_refused_in_enforce_mode(self):
         raw = b"POST /containers/create HTTP/1.1\r\nHost: d\r\nContent-Length: 3\r\n\r\n{{{"

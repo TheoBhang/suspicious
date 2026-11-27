@@ -84,6 +84,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: ChromaDB server and client versions match
+        run: bash scripts/ci/check-chromadb-version.sh
       - run: pip install ruff==0.15.13
       - name: ruff check
         run: ruff check Suspicious/ email-feeder/ Analyzers/

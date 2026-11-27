@@ -282,7 +282,8 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      docker_cortex:
+      # Not on docker_cortex: Cortex must not be able to reach the raw socket proxy and skip the policy.
+      docker_upstream:
         aliases: [docker-proxy-upstream]
 
   # What Cortex actually talks to as docker-proxy-cortex:2375. The socket proxy above
@@ -327,6 +328,7 @@ services:
     networks:
       docker_cortex:
         aliases: [docker-proxy-cortex]
+      docker_upstream: {}
 
   # ── ai_inference (persistent AIMailAnalyzer model server) ───────────────
   #
@@ -465,5 +467,7 @@ networks:
   renderer:            # mail_renderer: Django and Celery only, no route out
     internal: true
   reverse_network:
-  docker_cortex:
+  docker_cortex:       # Cortex and the Docker policy service
+    internal: true
+  docker_upstream:     # the Docker policy service and the raw socket proxy, nothing else
     internal: true

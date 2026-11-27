@@ -32,6 +32,7 @@ class Row:
     score: float | None
     error: str | None = None
     ai: bool | None = None  # mail road: the case has an AiAssessment; None on other roads
+    scored: int | None = None  # analyzer reports the replay could score; 0 = nothing to replay
 
 
 class _Rollback(Exception):
@@ -92,14 +93,14 @@ def replay_case(case_id, analyst=None):
     try:
         with transaction.atomic():
             CortexAnalyzerReports.get_report(case)
-            row.replay, row.score = case.results, case.final_score
+            row.replay, row.score, row.scored = case.results, case.final_score, case.analysis_done
             raise _Rollback
     except _Rollback:
         pass
     finally:
         logger.removeHandler(capture)
     if capture.messages:
-        row.replay, row.score, row.error = None, None, capture.messages[0][:300]
+        row.replay, row.score, row.scored, row.error = None, None, None, capture.messages[0][:300]
     return row
 
 
@@ -114,12 +115,16 @@ def summarise(rows):
     # A mail case with no AiAssessment finalised before the ai_model connector (or without it); the
     # engine now treats a missing AI vote as Inconclusive on purpose, so replaying it proves nothing.
     no_ai = [r for r in rows if not r.error and r.ai is False]
-    ok = [r for r in rows if not r.error and r.ai is not False]
+    # Nothing scorable (no analyzer report reached the engine): cases whose reports were purged by
+    # retention (`delete_old_reports`) and synthetic test cases whose verdict never came from reports. The replay can only say Failure; that is not drift.
+    nothing = [r for r in rows if not r.error and r.ai is not False and r.scored == 0]
+    ok = [r for r in rows if not r.error and r.ai is not False and r.scored != 0]
     plain = [r for r in ok if not r.analyst]
     edited = [r for r in ok if r.analyst]
     return {
         "errors": sum(1 for r in rows if r.error),
         "no_ai": len(no_ai),
+        "nothing": len(nothing),
         "drift": {
             "n": len(plain),
             "changed": sum(1 for r in plain if r.stored != r.replay),

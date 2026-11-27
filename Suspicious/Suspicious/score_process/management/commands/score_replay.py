@@ -56,6 +56,9 @@ class Command(BaseCommand):
         if s["no_ai"]:
             w(f"{s['no_ai']} mail cases have no AI assessment (finalised before the ai_model connector): "
               "left out of both views, because a missing AI vote is Inconclusive by design now")
+        if s["nothing"]:
+            w(f"{s['nothing']} cases have no analyzer report to score (purged by report retention, or synthetic test cases): left out of "
+              "both views, the replay can only answer Failure for them")
         d = s["drift"]
         w(f"Drift (stored vs replay, analyst-edited excluded): {d['changed']} of {d['n']} changed")
         for (old, new), n in sorted(d["matrix"].items(), key=lambda x: str(x)):
@@ -72,7 +75,7 @@ class Command(BaseCommand):
             out = csv.writer(fh)
             out.writerow(["case_id", "road", "kind", "stored", "analyst", "replay", "score", "error"])
             for r in rows:
-                if r.ai is False and not r.error:
+                if (r.ai is False or r.scored == 0) and not r.error:
                     continue
                 kind = "accuracy" if r.analyst else "drift"
                 expected = r.analyst or r.stored

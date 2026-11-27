@@ -84,6 +84,16 @@ class ReplayCase(TestCase):
         self.assertEqual(row.road, "ioc")
         self.assertIsNone(row.ai)   # the AI vote only exists on the mail road
 
+    def test_a_case_with_nothing_to_score_has_zero_scored(self):
+        user = get_user_model().objects.get_or_create(username="replay_u")[0]
+        ip = IP.objects.create(address="203.0.113.99")   # no analyzer report at all
+        case = Case.objects.create(description="", reporter=user, results=Result.DANGEROUS)
+        case.nonFileIocs = CaseHasNonFileIocs.objects.create(case=case, ip=ip)
+        case.save()
+        row = replay.replay_case(case.pk)
+        self.assertEqual(row.scored, 0)
+        self.assertEqual(replay.replay_case(make_ioc_case(8).pk).scored, 1)
+
     def test_a_mail_case_without_an_ai_assessment_is_flagged(self):
         case = make_ioc_case(7)
         mail = Mail.objects.create(subject="s", reportedBy="r", date=timezone.now(), to="t", mail_id="rp-m7")
@@ -132,6 +142,16 @@ class Summary(TestCase):
         self.assertEqual(s["no_ai"], 2)
         self.assertEqual(s["accuracy"]["n"], 1)
         self.assertEqual(s["drift"]["n"], 0)
+
+    def test_cases_with_nothing_scorable_are_counted_and_left_out(self):
+        empty = self.row("Dangerous", "Failure")
+        empty.scored = 0
+        real = self.row("Safe", "Safe")
+        real.scored = 3
+        s = replay.summarise([empty, real])
+        self.assertEqual(s["nothing"], 1)
+        self.assertEqual(s["drift"]["n"], 1)
+        self.assertEqual(s["drift"]["changed"], 0)
 
     def test_errors_are_counted_apart_from_both_views(self):
         s = replay.summarise([self.row("Safe", None, error="x"), self.row("Safe", "Safe")])

@@ -129,7 +129,7 @@ def _dispatch(value, data_type, case, job_ids) -> None:
     for name in names:
         try:
             _dispatch_engine(name, value, data_type, data_value, case, roles, job_ids)
-        except Exception as exc:  # noqa: BLE001: one engine must not stop the others
+        except Exception as exc:  # noqa: BLE001  # one engine must not stop the others
             logger.error("Engine %s failed to dispatch %s: %s", name, data_type, type(exc).__name__)
 
 
@@ -155,7 +155,7 @@ def _dispatch_engine(name, value, data_type, data_value, case, roles, job_ids) -
             continue
         try:
             job_id = _start(connector, name, entry, value, data_type, data_value, case)
-        except Exception as exc:  # noqa: BLE001: one analyzer must not stop the others
+        except Exception as exc:  # noqa: BLE001  # one analyzer must not stop the others
             logger.error("Error running analyzer %s on %s: %s", entry.name, name, type(exc).__name__)
             continue
         if job_id:
@@ -212,7 +212,7 @@ def _start(connector, name, entry, value, data_type, data_value, case) -> str | 
 
     try:
         started = connector.start(entry, data_type, data_value)
-    except Exception as exc:  # noqa: BLE001: the class name only, never a URL or secret
+    except Exception as exc:  # noqa: BLE001  # the class name only, never a URL or secret
         logger.warning("Engine %s failed to start %s on %s: %s", name, entry.name, data_type, type(exc).__name__)
         _failed_start(name, case, entry.name, type(exc).__name__)
         return None
@@ -282,7 +282,7 @@ def _start_deferred(connector, name, entry, analyzer_id, job_id, case) -> None:
         try:
             with transaction.atomic():  # a savepoint: a failing hook never undoes the row
                 connector.on_started(case, entry.name)
-        except Exception as exc:  # noqa: BLE001: the class name only, a message may carry data
+        except Exception as exc:  # noqa: BLE001  # the class name only, a message may carry data
             logger.error("Engine %s on_started for %s failed: %s", name, entry.name, type(exc).__name__)
         transaction.on_commit(lambda: run_engine_job.delay(row.id))
 
@@ -431,7 +431,7 @@ def refresh(caj, cache: dict | None = None) -> None:
             engine = registry.instantiate(name)
             fetched = cache[caj.cortex_job_id] = engine.fetch(_external_job_id(name, caj.cortex_job_id))
         close_row(caj, update_report(report, fetched, stale_timeout(name)))
-    except Exception as exc:  # noqa: BLE001: one bad row must not stall the reconcile pass
+    except Exception as exc:  # noqa: BLE001  # one bad row must not stall the reconcile pass
         logger.error("Refresh of job %s failed: %s", caj.cortex_job_id, type(exc).__name__)
 
 
@@ -481,7 +481,7 @@ def handle_webhook(connector_name: str, headers, payload) -> tuple[int, dict]:
     try:
         try:
             engine = registry.instantiate(connector_name)
-        except Exception as exc:  # noqa: BLE001: runtime config unreadable; log the class only
+        except Exception as exc:  # noqa: BLE001  # runtime config unreadable; log the class only
             logger.error("%s webhook: config unreadable (%s), using an empty config",
                          connector_name, type(exc).__name__)
             engine = registry.get(connector_name)({})  # so the settings secret is the fallback

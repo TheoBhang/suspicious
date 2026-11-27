@@ -91,7 +91,7 @@ def get_secret(key: str, default: Any = None, *, fail_fast: bool = False) -> Any
 
     try:
         value = _read_from_vault(key)
-    except Exception as exc:  # noqa: BLE001 (boot must fail readably)
+    except Exception as exc:  # noqa: BLE001  # (boot must fail readably)
         import hvac
 
         if isinstance(exc, hvac.exceptions.InvalidPath):

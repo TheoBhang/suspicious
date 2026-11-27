@@ -15,15 +15,35 @@ extend-exclude = [
 # rules (comprehensions, import-sorting, ruff-specific checks, ...) on a
 # newer release and failed backend-lint on ~1500 pre-existing findings across
 # the whole tree, unrelated to whatever a given PR actually touched.
-select = ["E4", "E7", "E9", "F"]
+select = [
+    "E4", "E7", "E9", "F",
+    "B",   # flake8-bugbear: closure bugs, unused loop variables, blind exception asserts
+    "S",   # flake8-bandit: the security checks the 2026-10 audit asked for
+]
 # Ignore the intentional "config loaded after logger" import-ordering pattern
 # used across cron/service modules.
 ignore = [
     "E402",  # module-level import not at top — deliberate: CONFIG_PATH blocks
              # are intentionally placed after logger setup in several modules.
+    "B904",  # raise without `from` inside except: style; the implicit chain is kept
+    "B905",  # zip() without strict=: style, noisy on py312 code that predates it
+    "S110",  # try/except/pass and
+    "S112",  # try/except/continue: best-effort cleanup is deliberate here; BLE would be the rule
+             # to turn on if broad excepts become a concern
+    "S108",  # fixed /tmp scratch paths: each service runs in its own container with a private /tmp
 ]
 
 [lint.per-file-ignores]
 # pytest fixtures are imported from a sibling test module and then requested as
 # arguments, which F811 reads as a redefinition.
 "Analyzers/**/tests/*.py" = ["F811"]
+# Tests assert, use throwaway passwords and /tmp paths, and may assert a blind Exception.
+"**/tests/**" = ["S101", "S105", "S106", "S107", "S113", "S311", "S324", "S603", "S607", "B006", "B007", "B011", "B017", "B023"]
+"**/test_*.py" = ["S101", "S105", "S106", "S107", "S113", "S311", "S324", "S603", "S607", "B006", "B007", "B011", "B017", "B023"]
+"**/tests.py" = ["S101", "S105", "S106", "S107", "S113", "S311", "S324", "S603", "S607", "B006", "B007", "B011", "B017", "B023"]
+"**/tests_*.py" = ["S101", "S105", "S106", "S107", "S113", "S311", "S324", "S603", "S607", "B006", "B007", "B008", "B011", "B017", "B023"]
+"**/conftest.py" = ["S101", "S105", "S106"]
+# Developer scripts and notebooks-in-code under Analyzers/: they read trusted local files and assert.
+"Analyzers/AIMailAnalyzer/tools/*.py" = ["S101", "S301"]
+"Analyzers/AIMailAnalyzer/train_test_models.py" = ["S101"]
+"Analyzers/AIMailAnalyzer/build_test_dataset.py" = ["S310"]

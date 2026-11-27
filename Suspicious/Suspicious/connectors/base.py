@@ -253,10 +253,10 @@ class Connector(ABC):
         """Execute a deferred job (see StartResult.deferred)."""
         raise NotImplementedError
 
-    def on_started(self, case, analyzer_name: str) -> None:
+    def on_started(self, case, analyzer_name: str) -> None:  # noqa: B027  # optional hook, no-op by default
         """Called after a job of this engine is started for ``case``. Does nothing by default."""
 
-    def on_result(self, case, analyzer_name: str, result: FetchResult) -> None:
+    def on_result(self, case, analyzer_name: str, result: FetchResult) -> None:  # noqa: B027  # optional hook
         """Called when a job of this engine reaches a result for ``case``. Does nothing by default.
         A job closed without a result (stale rescue, a lost enqueue, a dead worker, an instantiation
         failure) never reaches on_result: a deferred engine must put its 'no result' state in

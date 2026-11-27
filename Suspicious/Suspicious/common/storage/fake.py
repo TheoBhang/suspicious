@@ -47,7 +47,7 @@ class FakeObjectStore(ObjectStore):
         body = data.read() if length is None else data.read(length)
         self._data[(bucket, key)] = body
         objects[key] = ObjectInfo(
-            name=key, size=len(body), etag=hashlib.md5(body).hexdigest(),
+            name=key, size=len(body), etag=hashlib.md5(body, usedforsecurity=False).hexdigest(),
             last_modified=datetime.now(timezone.utc), metadata=dict(metadata or {}),
         )
 

@@ -325,8 +325,8 @@ def process_emails_from_mailboxes(
             # the next cycle retries it — no batch reprocess of the successes.
             handled_ids: list = []
 
-            def _ids_for(submission_dir: str) -> list:
-                return [m.original_mail.id for m in email_list
+            def _ids_for(submission_dir: str, emails=email_list) -> list:
+                return [m.original_mail.id for m in emails
                         if m.submission_dir == submission_dir]
 
             # Caps gate: oversized valid submissions are acked as bad, not stored.

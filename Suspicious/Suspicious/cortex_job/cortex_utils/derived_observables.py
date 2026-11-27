@@ -81,7 +81,7 @@ def _blocked(value: str, data_type: str) -> str:
             for reason in allow.model_dump().values():
                 if reason:
                     return f"allow-listed ({reason})"
-        except Exception: # noqa: BLE001: never block ingestion on an allow-list error
+        except Exception: # noqa: BLE001  # never block ingestion on an allow-list error
             logger.warning("derived: allow-list check failed for %r", value, exc_info=True)
     return ""
 
@@ -317,7 +317,7 @@ def ingest_derived_observables(case) -> int:
                 # re-dispatch. Matches the primary dispatch path.
                 engines.dispatch(value=obj, data_type=data_type, case=case)
                 new_count += 1
-            except Exception as exc: # noqa: BLE001: one bad value must not abort the pass
+            except Exception as exc: # noqa: BLE001  # one bad value must not abort the pass
                 logger.warning(
                     "derived: skip %r: %s", value, exc, exc_info=True
                 )

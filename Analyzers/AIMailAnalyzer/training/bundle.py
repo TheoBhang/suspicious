@@ -177,8 +177,8 @@ def write_bundle(dir, *, heads, calibration, knn, campaign_profile, manifest) ->
                 fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
-        os.chmod(tmp, 0o755)
-        os.chmod(os.path.join(tmp, "heads"), 0o755)
+        os.chmod(tmp, 0o755)  # noqa: S103  # a directory: it must be traversable
+        os.chmod(os.path.join(tmp, "heads"), 0o755)  # noqa: S103  # same
         _fsync_dir(os.path.join(tmp, "heads"))
         _fsync_dir(tmp)
         try:

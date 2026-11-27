@@ -31,7 +31,7 @@ from suspicious.secrets import SecretStoreUnavailable, get_secret, set_secret
 
 logger = logging.getLogger("api.connectors")
 
-SECRET_MASK = "********"
+SECRET_MASK = "********"  # noqa: S105  # the display mask, not a password
 
 
 def _connector_or_none(name: str):
@@ -273,7 +273,7 @@ class ConnectorConfigView(APIView):
                     {"errors": {field_key: "secret store not configured"}},
                     status=status.HTTP_409_CONFLICT,
                 )
-            except Exception as exc: # noqa: BLE001: surface any Vault write failure as 502
+            except Exception as exc: # noqa: BLE001  # surface any Vault write failure as 502
                 # Not logger.exception(): the traceback/exception message can
                 # echo back the failed HTTP request (hvac wraps requests
                 # errors, which sometimes embed the request body): and that
@@ -312,7 +312,7 @@ class ConnectorTestView(APIView):
                     f"'{key}'" for key in bad) + f": {URL_ERROR}")
             else:
                 health = connector.health_check()
-        except Exception as exc: # noqa: BLE001: surface as failed health
+        except Exception as exc: # noqa: BLE001  # surface as failed health
             health = HealthStatus(ok=False, detail=str(exc))
         state = get_state(name)
         state.last_health_ok = health.ok

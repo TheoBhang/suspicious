@@ -239,7 +239,7 @@ def _process_prefix_submissions(base_path: str, bucket_name: str) -> None:
                 os.path.dirname(wrapper), wrapper, submission_id,
                 reported_by, processor, reporter_note=reporter_note,
                 done_emails=done_emails,
-                on_email_done=lambda d: source.mark_email_done(submission_id, d),
+                on_email_done=lambda d, sid=submission_id: source.mark_email_done(sid, d),
             )
             if failed:
                 logger.error("Submission %s: %d email(s) were not ingested: %s",

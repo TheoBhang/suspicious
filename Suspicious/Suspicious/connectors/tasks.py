@@ -89,7 +89,7 @@ def _run_deferred_job(task, row_id: int, engine: str = "") -> None:
     except ProviderUnavailable as exc:
         if exc.retryable and task.request.retries < task.max_retries:
             raise task.retry(
-                exc=exc, countdown=5 * 2 ** task.request.retries + random.uniform(0, 3)
+                exc=exc, countdown=5 * 2 ** task.request.retries + random.uniform(0, 3)  # noqa: S311  # retry jitter, not a secret
             )
         error = str(exc)
     except Exception as exc:  # noqa: BLE001 — connector code is untrusted
@@ -126,7 +126,7 @@ def _close_engine_job(row_id, name, analyzer_name, connector, result, *, attempt
             try:
                 with transaction.atomic():  # a savepoint: a failing hook leaves nothing half-written
                     connector.on_result(case, analyzer_name, result)
-            except Exception as exc:  # noqa: BLE001: the class name only, a message may carry data
+            except Exception as exc:  # noqa: BLE001  # the class name only, a message may carry data
                 logger.error("Engine %s on_result for case %s failed: %s", name, case.id, type(exc).__name__)
                 error = f"could not store the result: {type(exc).__name__}"
                 success = False

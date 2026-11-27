@@ -82,7 +82,7 @@ class AiNarrationConnector(Connector):
         try:
             requests.get(f"{url}/api/version", timeout=5).raise_for_status()
             return HealthStatus(ok=True, detail=f"selected provider: ollama ({url}, reachable)")
-        except Exception as exc:  # noqa: BLE001 (health check must not raise)
+        except Exception as exc:  # noqa: BLE001  # (health check must not raise)
             return HealthStatus(
                 ok=False, detail=f"selected provider: ollama ({url}) unreachable: {exc}"
             )
@@ -100,7 +100,7 @@ class AiNarrationConnector(Connector):
         label = f"selected provider: openai_compatible ({base}"
         try:
             response = requests.get(f"{base}/models", headers=headers, timeout=5)
-        except Exception as exc:  # noqa: BLE001 (health check must not raise)
+        except Exception as exc:  # noqa: BLE001  # (health check must not raise)
             return HealthStatus(ok=False, detail=f"{label}) unreachable: {exc}")
         code = response.status_code
         if 200 <= code < 300:

@@ -82,7 +82,7 @@ class CortexConnector(Connector):
             if not response.ok:  # any other 4xx/5xx: do not read an error page as "no analyzers"
                 return HealthStatus(ok=False, detail=f"HTTP {response.status_code}")
             offered = {a.get("name") for a in response.json()}
-        except Exception as exc:  # noqa: BLE001: a health check must not raise
+        except Exception as exc:  # noqa: BLE001  # a health check must not raise
             return HealthStatus(ok=False, detail=str(exc))
         absent = sorted(
             f"{role}={name}" for role, name in (self.config.get("analyzers") or {}).items()
@@ -140,7 +140,7 @@ class CortexConnector(Connector):
                 CatalogEntry(a.id, a.name, tuple(getattr(a, "dataTypeList", None) or ()))
                 for a in found or []
             ]
-        except Exception as exc:  # noqa: BLE001: a failed lookup is an empty catalogue
+        except Exception as exc:  # noqa: BLE001  # a failed lookup is an empty catalogue
             logger.warning("cortex catalog lookup failed: %s", type(exc).__name__)
             return []
 

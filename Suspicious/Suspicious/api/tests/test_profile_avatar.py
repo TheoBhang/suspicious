@@ -2,7 +2,7 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
-from rest_framework.authtoken.models import Token  # noqa: F401 (import style parity)
+from rest_framework.authtoken.models import Token  # noqa: F401  # (import style parity)
 
 from common.storage import FakeObjectStore
 from profiles.profiles_utils.avatar_storage import AVATAR_MAX_BYTES

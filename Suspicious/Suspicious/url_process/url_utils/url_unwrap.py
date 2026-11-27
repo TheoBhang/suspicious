@@ -53,7 +53,7 @@ def _direct_hops(url: str) -> list[str]:
     try:
         parts = urlsplit(url)
         return _safelinks(parts) or _urldefense(url, parts)
-    except Exception:  # noqa: BLE001 (observable creation must never break here)
+    except Exception:  # noqa: BLE001  # (observable creation must never break here)
         logger.warning("unwrap_url: failed on %r; fail-open", url, exc_info=True)
         return []
 

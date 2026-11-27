@@ -522,9 +522,7 @@ class CortexJobManager:
         except Exception as e:
             fetch_mail_logger.error(f"Failed to initialize Cortex API: {e}")
             api = None
-        for api in [api]:
-            if api is None:
-                continue
+        if api is not None:
             try:
                 report = _fetch_report(api, job_id)
                 if report:

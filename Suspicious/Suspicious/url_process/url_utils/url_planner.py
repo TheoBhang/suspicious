@@ -78,7 +78,7 @@ def _registered_domain_lower(host: str) -> str:
     try:
         from mail_feeder.mail_utils.meioc import tldcache
         return (tldcache(host).registered_domain or "").lower()
-    except Exception:  # noqa: BLE001 (scoring must never raise)
+    except Exception:  # noqa: BLE001  # (scoring must never raise)
         return ""
 
 
@@ -146,7 +146,7 @@ def score_interestingness(url: str, *, sender_domain: str | None = None) -> int:
             score -= 10
 
         return max(0, min(255, score))
-    except Exception:  # noqa: BLE001 (scoring must never raise)
+    except Exception:  # noqa: BLE001  # (scoring must never raise)
         logger.warning("score_interestingness failed for %r; defaulting to 0", url, exc_info=True)
         return 0
 
@@ -178,7 +178,7 @@ def _registered_domain_for_url(url) -> str:
         if "://" not in addr:
             addr = "http://" + addr
         return _registered_domain_lower(urlsplit(addr).hostname or "")
-    except Exception:  # noqa: BLE001 (fail-open)
+    except Exception:  # noqa: BLE001  # (fail-open)
         return ""
 
 
@@ -242,13 +242,13 @@ def plan_url_analysis(url_instances, *, sender_domain=None) -> URLAnalysisPlan:
             u.canonical_key = _safe_canonical(u)
             u.interestingness = score_interestingness(u.address or "", sender_domain=sender_domain)
             u.save(update_fields=["canonical_key", "interestingness"])
-        except Exception:  # noqa: BLE001 (fail-open)
+        except Exception:  # noqa: BLE001  # (fail-open)
             logger.warning("annotate failed for URL id=%s; fail-open", u.pk, exc_info=True)
         group_key = u.canonical_key or f"__unkeyed__:{u.pk}"
         by_key.setdefault(group_key, []).append(u)
 
     representatives = []
-    for key, group in by_key.items():
+    for group in by_key.values():
         group.sort(key=lambda u: (-u.interestingness, len(u.address or "")))
         rep, dups = group[0], group[1:]
         representatives.append(rep)
@@ -263,7 +263,7 @@ def plan_url_analysis(url_instances, *, sender_domain=None) -> URLAnalysisPlan:
         prior = None
         try:
             prior = _find_reusable_prior(rep.canonical_key, ttl_days, all_ids)
-        except Exception:  # noqa: BLE001 (fail-open, still analyze)
+        except Exception:  # noqa: BLE001  # (fail-open, still analyze)
             logger.warning("TTL lookup failed for URL id=%s; fail-open", rep.pk, exc_info=True)
         if prior is not None:
             rep.analysis_status = URL.AnalysisStatus.REUSED
@@ -276,7 +276,7 @@ def plan_url_analysis(url_instances, *, sender_domain=None) -> URLAnalysisPlan:
     by_domain: dict[str, list] = {}
     for c in candidates:
         by_domain.setdefault(_registered_domain_for_url(c), []).append(c)
-    for domain, group in by_domain.items():
+    for group in by_domain.values():
         group.sort(key=lambda u: -u.interestingness)
         keep, overflow = group[:max_per_domain], group[max_per_domain:]
         for k in keep:

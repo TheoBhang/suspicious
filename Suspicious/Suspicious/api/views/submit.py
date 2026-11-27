@@ -1,5 +1,6 @@
 import logging
 
+from django.core.exceptions import ImproperlyConfigured
 from django.conf import settings
 from kombu.exceptions import OperationalError
 from rest_framework import serializers, status
@@ -117,7 +118,8 @@ class BaseSubmitView(APIView):
     success_message = "Submission accepted."
 
     def get_serializer(self, *args, **kwargs):
-        assert self.serializer_class is not None, "serializer_class must be set"
+        if self.serializer_class is None:
+            raise ImproperlyConfigured(f"{type(self).__name__}.serializer_class must be set")
         return self.serializer_class(*args, **kwargs)
 
     def build_forms(self, validated_data):

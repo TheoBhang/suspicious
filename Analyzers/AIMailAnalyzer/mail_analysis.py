@@ -3,7 +3,7 @@ import re
 from typing import NamedTuple
 import numpy as np
 
-from mail_archive import get_header_dict_list, untar_file  # noqa: F401 (re-exported)
+from mail_archive import get_header_dict_list, untar_file  # noqa: F401  # (re-exported)
 
 class ClassificationName(Enum):
     SAFE = 0

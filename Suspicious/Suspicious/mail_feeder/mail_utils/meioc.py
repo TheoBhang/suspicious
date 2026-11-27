@@ -63,7 +63,7 @@ def normalize_headers(raw_email_bytes):
     
     lines = raw_email.splitlines()
     normalized_lines = []
-    for i, line in enumerate(lines):
+    for line in lines:
         if line.startswith((' ', '\t')):
             normalized_lines.append(line)
         else:
@@ -294,8 +294,8 @@ def email_analysis(filename, exclude_private_ip, check_spf, check_dkim, file_out
                 if part.get_filename():
                     if part.get_payload(decode=True):
                         filename = part.get_filename()
-                        filemd5 = hashlib.md5(part.get_payload(decode=True)).hexdigest()
-                        filesha1 = hashlib.sha1(part.get_payload(decode=True)).hexdigest()
+                        filemd5 = hashlib.md5(part.get_payload(decode=True), usedforsecurity=False).hexdigest()
+                        filesha1 = hashlib.sha1(part.get_payload(decode=True), usedforsecurity=False).hexdigest()
                         filesha256 = hashlib.sha256(part.get_payload(decode=True)).hexdigest()
 
                         attachments_ist.append({"filename": filename, "MD5": filemd5, "SHA1": filesha1,

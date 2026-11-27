@@ -161,7 +161,7 @@ class APIKeyAdmin(admin.ModelAdmin):
 
         messages.success(
             request,
-            mark_safe(f"API Key created: <code>{raw_key}</code><br/>{html}"),
+            mark_safe(f"API Key created: <code>{raw_key}</code><br/>{html}"),  # noqa: S308  # raw_key is our own random token, html is static
         )
 
     # Readonly handling

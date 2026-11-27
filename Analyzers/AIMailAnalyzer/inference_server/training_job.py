@@ -385,7 +385,7 @@ def popen_launcher(workdir, params, threads, max_memory_mb):
     fd = os.open(os.path.join(workdir, WORKER_LOG), os.O_WRONLY | os.O_CREAT | os.O_EXCL
                  | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as log:
-        proc = subprocess.Popen([sys.executable, "-s", "-m", WORKER_MODULE, workdir],
+        proc = subprocess.Popen([sys.executable, "-s", "-m", WORKER_MODULE, workdir],  # noqa: S603  # fixed argv
                                 cwd=PACKAGE_ROOT, env=worker_env(workdir, threads, max_memory_mb),
                                 stdin=subprocess.PIPE, stdout=log, stderr=log, close_fds=True,
                                 start_new_session=True)

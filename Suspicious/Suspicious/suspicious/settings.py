@@ -535,7 +535,7 @@ APP_LOGGERS = [
     "hash_process", "file_process", "domain_process", "dashboard",
     "settings", "profiles", "tasp", "suspicious", "common", "ai_model",
 ]
-assert len(APP_LOGGERS) == len(set(APP_LOGGERS)), "duplicate name in APP_LOGGERS"
+assert len(APP_LOGGERS) == len(set(APP_LOGGERS)), "duplicate name in APP_LOGGERS"  # noqa: S101  # developer guard at import time
 
 
 def _app_logger(name: str) -> tuple[dict, dict]:

@@ -36,7 +36,7 @@ def make_ioc_case(n, stored=Result.SAFE, level="malicious", analyst=None):
     if analyst:
         LabelRecord.objects.create(
             case=case, source="analyst_verdict", source_ref=f"t{n}", label=analyst,
-            label_class="x", trust=1.0, observed_at=timezone.now(), status="active",
+            label_class=analyst, trust=1.0, observed_at=timezone.now(), status="active",
             message_id=f"<{n}@x>", message_id_hash=f"{n:064d}")
     return case
 
@@ -94,21 +94,42 @@ class ReplayCase(TestCase):
         self.assertEqual(row.scored, 0)
         self.assertEqual(replay.replay_case(make_ioc_case(8).pk).scored, 1)
 
-    def test_a_mail_case_without_an_ai_assessment_is_flagged(self):
+    def test_the_ai_flag_follows_the_cases_own_ai_fields(self):
         case = make_ioc_case(7)
         mail = Mail.objects.create(subject="s", reportedBy="r", date=timezone.now(), to="t", mail_id="rp-m7")
         archive = File.objects.create(linked_hash=Hash.objects.create(value="rp-h7"), tmp_path="rp7.tar.gz")
         MailArchive.objects.create(mail=mail, archive=archive)
-        case.fileOrMail = CaseHasFileOrMail.objects.create(case=case, mail=mail)
-        case.save()
-        row = replay.replay_case(case.pk)
-        self.assertEqual(row.road, "ioc")   # nonFileIocs still wins; the flag is about the mail road
-        mail_only = Case.objects.create(description="", reporter=case.reporter, results=Result.SAFE)
+        mail_only = Case.objects.create(description="", reporter=case.reporter, results=Result.SAFE,
+                                        results_ai=Result.INCONCLUSIVE)
         mail_only.fileOrMail = CaseHasFileOrMail.objects.create(case=mail_only, mail=mail)
         mail_only.save()
         row = replay.replay_case(mail_only.pk)
         self.assertEqual(row.road, "mail")
         self.assertFalse(row.ai)
+        Case.objects.filter(pk=mail_only.pk).update(results_ai="Unwanted", score_ai=5, confidence_ai=58)
+        self.assertTrue(replay.replay_case(mail_only.pk).ai)
+
+    def test_screenshot_capture_is_switched_off_during_a_replay(self):
+        from score_process.scoring.screenshots import registry
+        seen = []
+        with patch("score_process.scoring.cortex_analyzers.reports.CortexAnalyzerReports.get_report",
+                   side_effect=lambda case: seen.append(registry.capture(None))):
+            replay.replay_case(make_ioc_case(9).pk)
+        self.assertEqual(seen, [None])
+        self.assertEqual(registry.capture.__module__, registry.__name__)   # the real function is back
+
+    def test_a_swallowed_vote_failure_is_an_error(self):
+        import logging
+
+        def noisy(case):
+            logging.getLogger(replay.SCORING_LOGGER).exception(
+                "get_report: collect_votes failed for case %s", case.id)
+
+        with patch("score_process.scoring.cortex_analyzers.reports.CortexAnalyzerReports.get_report",
+                   side_effect=noisy):
+            row = replay.replay_case(make_ioc_case(10).pk)
+        self.assertIsNotNone(row.error)
+        self.assertIsNone(row.replay)
 
 
 class Summary(TestCase):
@@ -160,6 +181,12 @@ class Summary(TestCase):
 
 
 class Command(TestCase):
+    def test_the_road_filter_comes_before_the_limit(self):
+        make_ioc_case(11)
+        out = io.StringIO()
+        call_command("score_replay", "--road", "mail", "--limit", "5", stdout=out)
+        self.assertIn("0 cases", out.getvalue())
+
     def test_command_prints_both_views_and_writes_the_disagreements(self):
         make_ioc_case(4, stored=Result.SAFE)                        # drift: Safe -> Dangerous
         make_ioc_case(5, stored=Result.SAFE, analyst=Result.DANGEROUS)  # replay agrees with analyst

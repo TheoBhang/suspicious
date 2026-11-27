@@ -3,23 +3,28 @@
 `replay_case` runs the real ``CortexAnalyzerReports.get_report`` (signals, AI vote, deny and allow
 lists, embedded escalation, apply) inside a transaction that is always rolled back, so the result is
 what finalisation would give today and the engine cannot drift away from this tool. Rollback undoes
-the writes and discards every ``on_commit`` hook (events, Celery tasks, search indexing). Run it on a
-restored copy anyway: the run takes row locks, and a replica refuses the writes.
+the writes and discards every ``on_commit`` hook (events, Celery tasks, search indexing). Screenshot
+capture (an object-store write that a rollback cannot undo) is switched off for the run; it does not
+affect the verdict. Run it on a restored copy anyway: the run takes row locks, and a replica refuses
+the writes.
 
 ``get_report`` logs and swallows its own exceptions, so a scoring error is read back from its logger
-by the "get_report: error scoring" message. Other error lines on that logger (for example "MailInfo not
+by its "get_report: error scoring" and "collect_votes failed" messages. Other error lines on that logger (for example "MailInfo not
 found" for a case with no mail) are existing noise, not scoring failures.
 """
 import logging
 import math
 from collections import Counter
 from dataclasses import dataclass
+from unittest.mock import patch
 
 from django.db import transaction
 
 from case_handler.models import Case, Result
 
 SCORING_LOGGER = "tasp.cron.update_ongoing_case_jobs"  # the logger get_report writes to
+# Messages get_report logs when it swallows a failure that changes the verdict.
+FAILURE_PREFIXES = ("get_report: error scoring", "get_report: collect_votes failed")
 
 
 @dataclass
@@ -31,7 +36,7 @@ class Row:
     analyst: str | None
     score: float | None
     error: str | None = None
-    ai: bool | None = None  # mail road: the case has an AiAssessment; None on other roads
+    ai: bool | None = None  # mail road: the case carries an AI verdict (results_ai set); None elsewhere
     scored: int | None = None  # analyzer reports the replay could score; 0 = nothing to replay
 
 
@@ -46,7 +51,7 @@ class _ErrorCapture(logging.Handler):
 
     def emit(self, record):
         msg = record.getMessage()
-        if msg.startswith("get_report: error scoring"):
+        if msg.startswith(FAILURE_PREFIXES):
             self.messages.append(msg)
 
 
@@ -73,7 +78,7 @@ def analyst_labels():
     from ai_model.models import LabelRecord
     out = {}
     rows = (LabelRecord.objects.filter(source="analyst_verdict", status="active", case__isnull=False)
-            .order_by("observed_at").values_list("case_id", "label"))
+            .order_by("observed_at", "id").values_list("case_id", "label_class"))
     for case_id, label in rows:
         out[case_id] = label
     return out
@@ -85,13 +90,16 @@ def replay_case(case_id, analyst=None):
     case = Case.objects.select_related("fileOrMail", "nonFileIocs").get(pk=case_id)
     row = Row(case_id, road_of(case), case.results, None, analyst, None)
     if row.road == "mail":
-        from ai_model.models import AiAssessment
-        row.ai = AiAssessment.objects.filter(case_id=case_id).exists()
+        # The live scorer reads the AI vote from the case's own AI fields, and treats
+        # results_ai == Inconclusive as "AI missing" (collect_signals).
+        row.ai = case.results_ai != Result.INCONCLUSIVE
     capture = _ErrorCapture()
     logger = logging.getLogger(SCORING_LOGGER)
     logger.addHandler(capture)
     try:
-        with transaction.atomic():
+        with transaction.atomic(), patch(
+            "score_process.scoring.screenshots.registry.capture", return_value=None
+        ):
             CortexAnalyzerReports.get_report(case)
             row.replay, row.score, row.scored = case.results, case.final_score, case.analysis_done
             raise _Rollback
@@ -112,8 +120,8 @@ def _rate(rows, truth, wrong):
 
 
 def summarise(rows):
-    # A mail case with no AiAssessment finalised before the ai_model connector (or without it); the
-    # engine now treats a missing AI vote as Inconclusive on purpose, so replaying it proves nothing.
+    # A mail case with results_ai == Inconclusive has no AI vote; the engine treats that as Inconclusive on
+    # purpose (rule analysis-incomplete), so replaying it proves nothing about the scoring.
     no_ai = [r for r in rows if not r.error and r.ai is False]
     # Nothing scorable (no analyzer report reached the engine): cases whose reports were purged by
     # retention (`delete_old_reports`) and synthetic test cases whose verdict never came from reports. The replay can only say Failure; that is not drift.

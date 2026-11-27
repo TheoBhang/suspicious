@@ -34,13 +34,14 @@ class Command(BaseCommand):
         ids = Case.objects.exclude(results="").order_by("-id")
         if opts["case"]:
             ids = ids.filter(id__in=opts["case"])
-        ids = list(ids.values_list("id", flat=True))
+        ids = ids.select_related("fileOrMail", "nonFileIocs")
+        if opts["road"] != "all":   # resolve the road first, so --limit counts cases of that road
+            ids = (c for c in ids if replay.road_of(c) == opts["road"])
+        ids = [c.id for c in ids]
         if opts["limit"]:
             ids = ids[: opts["limit"]]
         labels = replay.analyst_labels()
         rows = [replay.replay_case(i, labels.get(i)) for i in ids]
-        if opts["road"] != "all":
-            rows = [r for r in rows if r.road == opts["road"]]
 
         self.report("All roads", rows)
         for road in sorted({r.road for r in rows}):
@@ -54,8 +55,9 @@ class Command(BaseCommand):
         w = self.stdout.write
         w(f"\n=== {title}: {len(rows)} cases, {s['errors']} scoring errors ===")
         if s["no_ai"]:
-            w(f"{s['no_ai']} mail cases have no AI assessment (finalised before the ai_model connector): "
-              "left out of both views, because a missing AI vote is Inconclusive by design now")
+            w(f"{s['no_ai']} mail cases have no AI vote (results_ai is Inconclusive, for example finalised "
+              "before the ai_model connector): left out of both views, because a missing AI vote is "
+              "Inconclusive by design")
         if s["nothing"]:
             w(f"{s['nothing']} cases have no analyzer report to score (purged by report retention, or synthetic test cases): left out of "
               "both views, the replay can only answer Failure for them")
@@ -71,7 +73,7 @@ class Command(BaseCommand):
         w(_rate_line("False alarms (analyst Safe, replay Dangerous)", a["false_alarm"]))
 
     def write_csv(self, path, rows):
-        with open(path, "w", newline="") as fh:
+        with open(path, "w", newline="", encoding="utf-8") as fh:
             out = csv.writer(fh)
             out.writerow(["case_id", "road", "kind", "stored", "analyst", "replay", "score", "error"])
             for r in rows:

@@ -43,6 +43,8 @@ _HEALTH_PORT = 9091
 # IMAP polling cadence (default 60 s) so a single missed cycle does not
 # flip a healthy feeder to degraded.
 _HEALTH_STALE_THRESHOLD_S = 5 * 60
+_MINIO_PROBE_INTERVAL_S = 60   # how often the poll loop checks the object store on its own
+_last_minio_probe = 0.0
 
 _stats: dict = {
     "last_successful_poll": 0.0,   # Unix timestamp; 0 = never polled
@@ -86,6 +88,25 @@ def _mark_minio_ok() -> None:
     """Record that a MinIO operation just succeeded."""
     with _stats_lock:
         _stats["minio_last_ok"] = time.time()
+
+
+def _probe_minio_if_due(minio_service, now: float | None = None) -> None:
+    """Check the object store on a timer, so /health does not depend on mail arriving: with an empty
+    mailbox no upload happens, and the passive marker alone went stale after five minutes. A failing
+    probe leaves the last good time alone (health goes stale as before) and is retried after the
+    interval, not on every cycle."""
+    global _last_minio_probe
+    now = time.time() if now is None else now
+    if now - _last_minio_probe < _MINIO_PROBE_INTERVAL_S:
+        return
+    _last_minio_probe = now
+    try:
+        minio_service.probe()
+    except Exception as exc:  # noqa: BLE001  # a probe must never stop the poll loop
+        logging.getLogger("email-feeder").warning("MinIO probe failed: %s", exc)
+        return
+    with _stats_lock:
+        _stats["minio_last_ok"] = now
 
 
 def _build_health_payload() -> dict:
@@ -538,6 +559,7 @@ def main() -> int:
                         e, exc_info=True,
                     )
 
+            _probe_minio_if_due(minio_service)
             logger.info("Starting new email processing cycle...")
             process_emails_from_mailboxes(
                 config=config,

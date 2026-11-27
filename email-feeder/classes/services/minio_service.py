@@ -43,6 +43,17 @@ class MinioService:
             self.__minio_client.make_bucket(bucket_name)
             logger.info("Created MinIO bucket '%s'", bucket_name)
 
+    def probe(self) -> None:
+        """One cheap authenticated call to the store, for the health check; raises when it fails.
+        The feeder bucket is checked when there is one (the call the upload path already makes), and
+        the bucket list in bucket-per-submission mode, which has no fixed bucket."""
+        if self.__minio_client is None:
+            raise Exception("MinIO client not available.")
+        if self.__config.feeder_bucket:
+            self.__minio_client.bucket_exists(self.__config.feeder_bucket)
+        else:
+            self.__minio_client.list_buckets()
+
     def upload_bytes(self, bucket_name: str, object_name: str, data: bytes,
                      content_type: str = "application/octet-stream") -> None:
         if self.__minio_client is None:

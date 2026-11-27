@@ -144,14 +144,20 @@ function AddBar({
   placeholder,
   loading,
   title,
+  validate,
+  valueLabel = "value",
 }: {
   onAdd: (values: string[]) => void;
   placeholder: string;
   loading: boolean;
   /** Names the field: a placeholder is not an accessible name. */
   title: string;
+  /** Checked before anything is sent: one invalid value refuses the batch, as the backend would. */
+  validate?: (value: string) => boolean;
+  valueLabel?: string;
 }) {
   const [input, setInput] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
   const hintId = React.useId();
   const theme = useTheme();
   // The theme's disabled contained button keeps the brand fill and loses the label; same neutral fill as the connector Save button.
@@ -163,6 +169,14 @@ function AddBar({
   const submit = () => {
     const values = parseMulti(input);
     if (!values.length) return;
+    const invalid = validate ? values.filter((v) => !validate(v)) : [];
+    if (invalid.length) {
+      // Keep the text so the typo can be fixed, not retyped.
+      const shown = invalid.slice(0, 3).join(", ") + (invalid.length > 3 ? ` +${invalid.length - 3} more` : "");
+      setError(`Not a valid ${valueLabel}: ${shown}. Nothing was added.`);
+      return;
+    }
+    setError(null);
     onAdd(values);
     setInput("");
   };
@@ -174,7 +188,8 @@ function AddBar({
         size="small"
         placeholder={placeholder}
         value={input}
-        onChange={(e) => setInput(e.target.value)}
+        onChange={(e) => { setInput(e.target.value); setError(null); }}
+        error={error !== null}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
@@ -185,7 +200,7 @@ function AddBar({
         maxRows={3}
         fullWidth
         slotProps={{ htmlInput: { "aria-label": `Add entries to ${title}` } }}
-        helperText="Enter, comma or space separated. Ctrl+Enter to submit"
+        helperText={error ?? "Enter, comma or space separated. Ctrl+Enter to submit"}
         sx={{
           "& .MuiFormHelperText-root": { fontSize: 11, mt: 0.4 },
         }}
@@ -285,6 +300,8 @@ export function EditableListPanel({
   placeholder,
   purpose,
   fileAccept = ".txt,.csv,.json",
+  validate,
+  valueLabel,
 }: {
   section: EditableListSection;
   /** Names the list in the bulk-delete confirmation. */
@@ -293,6 +310,9 @@ export function EditableListPanel({
   /** One documented sentence on what the list does; omitted when the repo does not say. */
   purpose?: string;
   fileAccept?: string;
+  /** See AddBar: refuses a batch holding an invalid value, naming it. */
+  validate?: (value: string) => boolean;
+  valueLabel?: string;
 }) {
   const qc = useQueryClient();
   const { enqueueSnackbar, closeSnackbar } = useSnackbar();
@@ -480,6 +500,8 @@ export function EditableListPanel({
         placeholder={placeholder}
         onAdd={(values) => addMutation.mutate(values)}
         loading={addMutation.isPending}
+        validate={validate}
+        valueLabel={valueLabel}
       />
 
       <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>

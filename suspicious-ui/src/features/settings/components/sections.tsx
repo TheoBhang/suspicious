@@ -9,10 +9,12 @@ import {
   InsertDriveFileOutlined,
   MailOutlined,
   PsychologyOutlined,
+  RouterOutlined,
   TuneOutlined,
 } from "@mui/icons-material";
 
 import type { EditableListSection, SettingsSection } from "@/features/settings/api";
+import { isIpAddress } from "@/features/submit/parseIndicators";
 import { AiModelPanel } from "@/features/aiModel/components/AiModelPanel";
 import { ConnectorsPanel } from "@/features/settings/components/ConnectorsPanel";
 import { CisoUsersPanel } from "@/features/settings/components/CisoUsersPanel";
@@ -59,6 +61,7 @@ const LIST_PURPOSE: Partial<Record<SectionKey, string>> = {
   domains_deny: "A domain on this list is marked dangerous when it appears in a submitted email.",
   emails_files_allow: "Files with these hashes are treated as safe and skip analysis.",
   filetypes_allow: "Files of these types are treated as safe and skip analysis.",
+  ips_allow: "IP addresses on this list are treated as safe and skip analysis.",
   campaign_domains_allow: "Authorised phishing simulations: still scored Dangerous, never shared to MISP.",
 };
 
@@ -72,15 +75,20 @@ export function SectionContent({ section }: { section: SectionMeta }) {
           purpose={LIST_PURPOSE[section.key]}
         />
       );
-    case "list":
+    case "list": {
+      const ips = section.key === "ips_allow";
       return (
         <EditableListPanel
           section={section.key as EditableListSection}
           title={section.title}
-          placeholder="Paste values, one per line or comma-separated…"
+          placeholder={ips ? "Paste IP addresses, one per line or comma-separated…" : "Paste values, one per line or comma-separated…"}
           purpose={LIST_PURPOSE[section.key]}
+          // The backend refuses the whole batch for one bad address; say which one before sending.
+          validate={ips ? isIpAddress : undefined}
+          valueLabel={ips ? "IP address" : undefined}
         />
       );
+    }
     case "toggle":
       return <FeederPanel />;
     case "scoring":
@@ -119,6 +127,14 @@ export const SECTIONS: SectionMeta[] = [
     title: "Campaign domains",
     subtitle: "Allow campaign or newsletter domains.",
     icon: <CampaignOutlined />,
+    kind: "list",
+  },
+  {
+    key: "ips_allow",
+    group: "lists",
+    title: "IP allowlist",
+    subtitle: "Allow known safe IP addresses.",
+    icon: <RouterOutlined />,
     kind: "list",
   },
   {

@@ -6,6 +6,7 @@ export type SettingsSection =
   | "campaign_domains_allow"
   | "emails_files_allow"
   | "filetypes_allow"
+  | "ips_allow"
   | "ciso_users"
   | "email_feeder"
   | "scoring"
@@ -58,7 +59,8 @@ export type EditableListSection =
   | "domains_deny"
   | "campaign_domains_allow"
   | "emails_files_allow"
-  | "filetypes_allow";
+  | "filetypes_allow"
+  | "ips_allow";
 
 /**
  * Structured response from POST /settings/list/<section>/.
@@ -89,6 +91,7 @@ type SectionResponseMap = {
   campaign_domains_allow: ListItem[];
   emails_files_allow: ListItem[];
   filetypes_allow: ListItem[];
+  ips_allow: ListItem[];
   watcher_legit_domains: ListItem[];
   watcher_monitored_domains: ListItem[];
   ciso_users: CisoUser[];

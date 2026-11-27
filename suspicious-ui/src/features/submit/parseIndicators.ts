@@ -16,9 +16,14 @@ const isIPv6 = (v: string) => {
   try { new URL(`http://[${v}]/`); return true; } catch { return false; }
 };
 
+const isIPv4 = (v: string) => IPV4.test(v) && v.split(".").every((o) => +o <= 255);
+
+/** A host IP address, IPv4 or IPv6. No ranges, no leading zeros, no port: what the backend accepts. */
+export const isIpAddress = (v: string) => isIPv4(v) || isIPv6(v);
+
 const classify = (v: string): IndicatorType => {
   if (HASH.test(v)) return "hash";
-  if (IPV4.test(v) && v.split(".").every((o) => +o <= 255)) return "ip";
+  if (isIPv4(v)) return "ip";
   if (/^https?:\/\//.test(v)) return "url";
   if (isIPv6(v)) return "ip";
   if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(v) && !v.includes("/")) return "domain";

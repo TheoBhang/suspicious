@@ -14,6 +14,7 @@ const PURPOSES: Record<string, string> = {
   domains_deny: "A domain on this list is marked dangerous when it appears in a submitted email.",
   emails_files_allow: "Files with these hashes are treated as safe and skip analysis.",
   filetypes_allow: "Files of these types are treated as safe and skip analysis.",
+  ips_allow: "IP addresses on this list are treated as safe and skip analysis.",
 };
 
 describe("list purpose sentence", () => {

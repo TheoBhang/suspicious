@@ -30,6 +30,16 @@ describe("GROUPS", () => {
   });
 });
 
+describe("ips_allow section", () => {
+  it("is a plain list in the Detection lists group", () => {
+    const meta = SECTIONS.find((s) => s.key === "ips_allow");
+    expect(meta).toBeDefined();
+    expect(meta!.group).toBe("lists");
+    expect(meta!.kind).toBe("list");
+    expect(parseSection("ips_allow")).toBe("ips_allow");
+  });
+});
+
 describe("ai_model section", () => {
   const meta = SECTIONS.find((s) => s.key === "ai_model");
   it("is an integrations section", () => {

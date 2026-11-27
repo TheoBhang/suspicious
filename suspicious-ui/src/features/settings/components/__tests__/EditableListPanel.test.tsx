@@ -451,3 +451,62 @@ describe("EditableListPanel", () => {
     expect(await screen.findByText('No entries matching "zzz"')).toBeInTheDocument();
   });
 });
+
+describe("EditableListPanel value validation", () => {
+  const isEven = (v: string) => /^\d+$/.test(v) && Number(v) % 2 === 0;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockList.mockResolvedValue([]);
+  });
+
+  const renderValidated = () =>
+    renderWithProviders(
+      <EditableListPanel section="ips_allow" title="IP allowlist" placeholder="Add IPs" validate={isEven} valueLabel="even number" />
+    );
+
+  it("refuses a batch with an invalid value, names it, and keeps what was typed", async () => {
+    const user = userEvent.setup();
+    renderValidated();
+    const box = screen.getByPlaceholderText("Add IPs");
+    await user.type(box, "2, 3, x, 4");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    expect(mockAdd).not.toHaveBeenCalled();
+    expect(await screen.findByText("Not a valid even number: 3, x. Nothing was added.")).toBeInTheDocument();
+    expect(box).toHaveValue("2, 3, x, 4");
+    expect(box).toBeInvalid();
+  });
+
+  it("clears the message once the text is edited", async () => {
+    const user = userEvent.setup();
+    renderValidated();
+    const box = screen.getByPlaceholderText("Add IPs");
+    await user.type(box, "3");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    await screen.findByText(/Not a valid even number: 3/);
+    await user.type(box, "0");
+    expect(screen.queryByText(/Not a valid even number/)).not.toBeInTheDocument();
+  });
+
+  it("submits a valid batch and clears the box", async () => {
+    const user = userEvent.setup();
+    mockAdd.mockResolvedValue({ created: ["1", "2"], duplicates: [], watcher_conflicts: [] });
+    renderValidated();
+    const box = screen.getByPlaceholderText("Add IPs");
+    await user.type(box, "2, 4");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+
+    await waitFor(() => expect(mockAdd).toHaveBeenCalledWith("ips_allow", ["2", "4"]));
+    expect(box).toHaveValue("");
+  });
+
+  it("does not validate anything when no validator is given", async () => {
+    const user = userEvent.setup();
+    mockAdd.mockResolvedValue({ created: ["1"], duplicates: [], watcher_conflicts: [] });
+    renderWithProviders(<EditableListPanel section="domains_allow" title="Domains" placeholder="Add domains" />);
+    await user.type(screen.getByPlaceholderText("Add domains"), "anything goes");
+    await user.click(screen.getByRole("button", { name: /^add$/i }));
+    await waitFor(() => expect(mockAdd).toHaveBeenCalledWith("domains_allow", ["anything", "goes"]));
+  });
+});

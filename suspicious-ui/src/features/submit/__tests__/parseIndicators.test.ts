@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseIndicators } from "../parseIndicators";
+import { isIpAddress, parseIndicators } from "../parseIndicators";
 
 describe("parseIndicators", () => {
   it("splits, refangs, types, dedupes", () => {
@@ -50,5 +50,18 @@ describe("parseIndicators", () => {
     expect(rows("2001:db8::1")).toEqual([["2001:db8::1", "ip"]]);
     expect(rows("not:an:address")).toEqual([["not:an:address", null]]);
     expect(rows("http://host:8080/")).toEqual([["http://host:8080/", "url"]]);
+  });
+});
+
+describe("isIpAddress", () => {
+  it("accepts IPv4 and IPv6 host addresses", () => {
+    for (const v of ["8.8.8.8", "0.0.0.0", "255.255.255.255", "::1", "2606:4700:4700::1111", "2001:db8::1"]) {
+      expect(isIpAddress(v), v).toBe(true);
+    }
+  });
+  it("rejects what the backend rejects: ranges, leading zeros, ports, garbage", () => {
+    for (const v of ["10.0.0.0/8", "192.168.001.1", "999.1.1.1", "1.2.3", "8.8.8.8:80", "not-an-ip", "", "example.com", "::g", "[::1]"]) {
+      expect(isIpAddress(v), v).toBe(false);
+    }
   });
 });

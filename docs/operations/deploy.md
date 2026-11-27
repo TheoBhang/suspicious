@@ -153,11 +153,17 @@ Cortex and that proxy and reads the body of container create and image pull requ
 - an image that is not in the analyzer catalogs (`analyzers.json` of the public and custom
   catalogs, plus `DOCKER_POLICY_EXTRA_IMAGES`, comma separated, for anything else);
 - `Privileged`, added capabilities, devices, device requests, `Mounts`, `VolumesFrom`, port
-  bindings, host PID, IPC, user or UTS namespaces, host or `container:` networking, `unconfined`
-  or `label=disable` security options, a non-default runtime;
-- a bind whose source is not inside the Cortex job directory (`${CORTEX_PATH}/jobs`), including
-  named volumes and `..` escapes;
-- any endpoint an analyzer run does not use (exec, update, archive, volumes, networks, build).
+  bindings, host PID, IPC, user or UTS namespaces, any network except the default, `bridge` or `none`
+  (a container on a user network could reach the socket proxy itself), `unconfined` or
+  `label=disable` security options, a non-default runtime;
+- a bind whose source is not a directory inside the Cortex job directory (`${CORTEX_PATH}/jobs`; the
+  directory itself is refused), including named volumes and `..` escapes;
+- any endpoint an analyzer run does not use (exec, update, archive, volumes, networks, build), connection upgrades, and any second request on a connection (one request is
+  forwarded per connection, the rest is never read). Docker decodes JSON keys case-insensitively, so
+  the body is parsed strictly: a key repeated in any case is refused.
+
+The service has a healthcheck (`GET /_ping` through the whole path) and Cortex waits for it; `make deploy`
+starts it before Cortex. The Python image is pinned by digest.
 
 `DOCKER_POLICY_MODE` selects `log` (the default: everything is forwarded, and what would have been
 refused is logged as `would_deny`) or `enforce` (answers 403). Run in `log` first, run a few of

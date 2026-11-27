@@ -6,10 +6,14 @@ service sits in front of it, reads the body of container create and image pull
 requests and applies an allow-list:
 
   * the image must come from the analyzer catalogs (or DOCKER_POLICY_EXTRA_IMAGES);
-  * no Privileged, no added capabilities, devices, host namespaces, host network,
-    unconfined security options, named volumes or Mounts;
-  * every bind source must sit inside the Cortex job directory;
-  * only the endpoints an analyzer run needs are reachable.
+  * no Privileged, no added capabilities, devices, host namespaces, unconfined security options,
+    named volumes or Mounts, and only the default network (default, bridge or none): a container
+    on a user network could reach the socket proxy itself;
+  * every bind source must be a directory inside the Cortex job directory (not the directory itself);
+  * only the endpoints an analyzer run needs are reachable, one request per connection, no upgrades.
+
+Docker decodes JSON keys case-insensitively and lets the last duplicate win, so the body is parsed
+strictly (a key repeated in any case is refused) and every key is compared in lower case.
 
 DOCKER_POLICY_MODE=log (default) forwards everything and logs what it would have
 refused; DOCKER_POLICY_MODE=enforce answers 403. Standard library only.
@@ -34,6 +38,28 @@ ENDPOINTS = [  # (method, path regex): everything an analyzer run uses, nothing 
     ("DELETE", rf"/containers/{CID}"),
 ]
 EMPTY = (None, "", [], {}, False, 0)
+
+
+def parse_json(raw):
+    """json.loads that refuses a key repeated in any case (Docker's decoder is case-insensitive)."""
+    def pairs(items):
+        seen = set()
+        for key, _ in items:
+            low = key.lower()
+            if low in seen:
+                raise ValueError(f"key {key!r} is repeated")
+            seen.add(low)
+        return dict(items)
+    return json.loads(raw, object_pairs_hook=pairs)
+
+
+def _fold(obj):
+    """Lower-case every key, so a field cannot hide behind its spelling."""
+    if isinstance(obj, dict):
+        return {k.lower(): _fold(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_fold(v) for v in obj]
+    return obj
 
 
 def normalise_image(name):
@@ -67,37 +93,42 @@ def _bind_problem(bind, job_dir):
         return f"bind {bind!r} is not a host path (named volumes are refused)"
     norm = posixpath.normpath(source)
     root = posixpath.normpath(job_dir)
-    if norm != root and not norm.startswith(root + "/"):
-        return f"bind source {source!r} is outside the job directory {root}"
+    if not norm.startswith(root + "/"):
+        return f"bind source {source!r} is not a directory inside the job directory {root}"
     return None
+
+
+DANGEROUS_FIELDS = ("CapAdd", "Devices", "DeviceRequests", "Mounts", "VolumesFrom", "Sysctls",
+                    "PortBindings", "CgroupParent", "PidMode", "IpcMode", "UsernsMode", "UTSMode")
+SAFE_NETWORKS = ("", "default", "bridge", "none")
 
 
 def evaluate_create(body, images, job_dir):
     """Reasons a container create body is refused (empty list: allowed)."""
     if not isinstance(body, dict):
-        return ["create body is not a JSON object"]
+        return ["create body is not a JSON object (or repeats a key)"]
+    body = _fold(body)
     problems = []
-    image = body.get("Image")
+    image = body.get("image")
     if not isinstance(image, str) or normalise_image(image) not in images:
         problems.append(f"image {image!r} is not in the analyzer catalogs")
-    host = body.get("HostConfig") or {}
+    host = body.get("hostconfig") or {}
     if not isinstance(host, dict):
         return problems + ["HostConfig is not an object"]
-    if host.get("Privileged"):
+    if host.get("privileged"):
         problems.append("Privileged is set")
-    for field in ("CapAdd", "Devices", "DeviceRequests", "Mounts", "VolumesFrom", "Sysctls",
-                  "PortBindings", "CgroupParent", "PidMode", "IpcMode", "UsernsMode", "UTSMode"):
-        if host.get(field) not in EMPTY:
+    for field in DANGEROUS_FIELDS:
+        if host.get(field.lower()) not in EMPTY:
             problems.append(f"HostConfig.{field} is set")
-    network = host.get("NetworkMode") or ""
-    if network == "host" or network.startswith("container:"):
-        problems.append(f"NetworkMode {network!r} is refused")
-    if host.get("Runtime") not in (None, "", "runc"):
-        problems.append(f"Runtime {host['Runtime']!r} is refused")
-    for opt in host.get("SecurityOpt") or []:
+    network = host.get("networkmode") or ""
+    if network not in SAFE_NETWORKS:
+        problems.append(f"NetworkMode {network!r} is refused (only default, bridge or none)")
+    if host.get("runtime") not in (None, "", "runc"):
+        problems.append(f"Runtime {host['runtime']!r} is refused")
+    for opt in host.get("securityopt") or []:
         if "unconfined" in str(opt).lower() or "disable" in str(opt).lower():
             problems.append(f"SecurityOpt {opt!r} weakens confinement")
-    binds = host.get("Binds") or []
+    binds = host.get("binds") or []
     for bind in binds if isinstance(binds, list) else [binds]:
         problem = _bind_problem(bind, job_dir)
         if problem:
@@ -120,7 +151,10 @@ def evaluate_request(method, path, query, body, images, job_dir):
             return ["image import (fromSrc) is refused"]
         name = (args.get("fromImage") or [""])[0]
         tag = (args.get("tag") or [""])[0]
-        image = normalise_image(f"{name}:{tag}" if tag and ":" not in name else name)
+        own_tag = name.rsplit("/", 1)[-1].partition(":")[2]
+        if tag and ("@" in name or (own_tag and own_tag != tag)):
+            return [f"pull of {name!r} with a different tag {tag!r}"]   # Docker would pull the tag
+        image = normalise_image(f"{name}:{tag}" if tag and not own_tag else name)
         if image not in images:
             return [f"pulling {image!r}: not in the analyzer catalogs"]
     return []
@@ -152,15 +186,16 @@ class Config:
 async def read_chunked(reader):
     data = b""
     while True:
-        size = int((await reader.readline()).split(b";")[0].strip() or b"0", 16)
+        field = (await reader.readline()).split(b";")[0].strip()
+        size = int(field, 16)   # an empty or non-hex size line raises ValueError
         if size == 0:
             while (await reader.readline()).strip():  # trailers
                 pass
             return data
+        if size > MAX_BODY - len(data):
+            raise ValueError("body too large")
         data += await reader.readexactly(size)
         await reader.readexactly(2)
-        if len(data) > MAX_BODY:
-            raise ValueError("body too large")
 
 
 async def refuse(writer, status, reason):
@@ -195,7 +230,9 @@ async def handle(reader, writer, cfg):
         headers = [tuple(h.split(":", 1)) for h in lines[1:] if ":" in h]
         names = {k.strip().lower(): v.strip() for k, v in headers}
         url = urllib.parse.urlsplit(target)
-        upgrade = "upgrade" in names.get("connection", "").lower()
+        if "upgrade" in names.get("connection", "").lower() or "upgrade" in names:
+            log("request", method=method, path=url.path, verdict="deny", problems=["upgrade is refused"])
+            return await refuse(writer, 403, "connection upgrades are refused")
         body = b""
         try:
             if "chunked" in names.get("transfer-encoding", "").lower():
@@ -210,7 +247,7 @@ async def handle(reader, writer, cfg):
         parsed = None
         if method == "POST" and re.sub(r"^/v\d+(\.\d+)?", "", url.path) == "/containers/create":
             try:
-                parsed = json.loads(body or b"null")
+                parsed = parse_json(body or b"null")
             except ValueError:
                 parsed = None
         problems = evaluate_request(method, url.path, url.query, parsed, cfg.images, cfg.job_dir)
@@ -223,17 +260,16 @@ async def handle(reader, writer, cfg):
             return await refuse(writer, 403, "; ".join(problems))
 
         skip = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "content-length"}
-        out = [lines[0]] + [f"{k}:{v}" for k, v in headers if k.strip().lower() not in skip
-                            and not (upgrade and k.strip().lower() == "connection")]
-        out.append("Connection: Upgrade" if upgrade else "Connection: close")
+        out = [lines[0]] + [f"{k}:{v}" for k, v in headers if k.strip().lower() not in skip]
+        out.append("Connection: close")
         if body:
             out.append(f"Content-Length: {len(body)}")
         up_reader, up_writer = await asyncio.open_connection(cfg.upstream_host, cfg.upstream_port)
         up_writer.write(("\r\n".join(out) + "\r\n\r\n").encode("latin-1") + body)
         await up_writer.drain()
-        pump = asyncio.create_task(pipe(reader, up_writer))
+        # One request per connection: only the request judged above is forwarded. Anything the client
+        # sends after it (a pipelined second request) is never read, let alone passed on.
         await pipe(up_reader, writer)
-        pump.cancel()
     except OSError as exc:
         log("upstream_error", error=str(exc))
     finally:

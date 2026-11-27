@@ -131,9 +131,12 @@ ok "suspicious_ui restarted"
 # It runs last so the app tier, already attached to every network, never loses them.
 step "Attaching MariaDB and RustFS to their networks, Cortex to its Docker proxy"
 $COMPOSE up -d --no-deps db_suspicious rustfs
-# Cortex lost the host Docker socket: start its proxy and recreate it
-# (compose recreates only what changed, so this is a no-op on an up-to-date stack).
-$COMPOSE up -d --no-deps docker_proxy_cortex cortex
+# Cortex lost the host Docker socket: start its proxy and the policy service in front of it, then
+# recreate Cortex (compose recreates only what changed, so this is a no-op on an up-to-date stack).
+# --no-deps would skip the policy service, and Cortex's docker-proxy-cortex name belongs to it.
+$COMPOSE up -d --no-deps docker_proxy_cortex docker_policy_cortex
+bash "${SCRIPTS}/health-wait.sh" "${SVC_PREFIX:-}docker_policy_cortex" 60
+$COMPOSE up -d --no-deps cortex
 if [ -n "$($COMPOSE ps -q traefik 2>/dev/null)" ]; then
   $COMPOSE up -d --no-deps traefik
 fi

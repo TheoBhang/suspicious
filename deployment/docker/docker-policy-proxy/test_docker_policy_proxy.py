@@ -75,6 +75,31 @@ class CreatePolicy(unittest.TestCase):
             with self.subTest(field=field, value=value):
                 self.assertTrue(check(create(HostConfig={field: value})))
 
+    def test_only_the_default_networks_are_allowed(self):
+        for ok in ("", "default", "bridge", "none"):
+            with self.subTest(ok=ok):
+                self.assertEqual(check(create(HostConfig={"NetworkMode": ok})), [])
+        for bad in ("docker_cortex", "suspicious_net", "myproj_data", "host", "container:abc"):
+            with self.subTest(bad=bad):
+                self.assertTrue(check(create(HostConfig={"NetworkMode": bad})))
+
+    def test_the_job_directory_itself_cannot_be_bound(self):
+        self.assertTrue(check(create(HostConfig={"Binds": [f"{JOBS}:/job"]})))
+        self.assertTrue(check(create(HostConfig={"Binds": [f"{JOBS}/:/job"]})))
+
+    def test_key_case_does_not_hide_a_field(self):
+        body = {"Image": "mailheaderanalyzer:local", "hostconfig": {"privileged": True, "binds": ["/:/h"]}}
+        self.assertTrue(check(body))
+        self.assertTrue(check({"image": "alpine"}))
+
+    def test_a_repeated_key_in_any_case_is_refused_when_parsing(self):
+        for raw in ('{"Image":"a","image":"b"}', '{"Image":"a","HostConfig":{"Privileged":false,"privileged":true}}',
+                    '{"Image":"a","Image":"b"}'):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    dpp.parse_json(raw.encode())
+        self.assertEqual(dpp.parse_json(b'{"Image":"a","HostConfig":{"Binds":[]}}')["Image"], "a")
+
     def test_harmless_hostconfig_fields_pass(self):
         host = {"AutoRemove": False, "Memory": 1 << 30, "NetworkMode": "default", "CapDrop": ["ALL"]}
         self.assertEqual(check(create(HostConfig=host)), [])
@@ -123,6 +148,13 @@ class RequestPolicy(unittest.TestCase):
         self.assertEqual(self.ev("POST", "/images/create", ok), [])
         self.assertTrue(self.ev("POST", "/images/create", "fromImage=evil%2Fx&tag=1"))
         self.assertTrue(self.ev("POST", "/images/create", "fromSrc=http%3A%2F%2Fx"))
+
+    def test_a_tag_that_disagrees_with_the_tagged_name_is_refused(self):
+        self.assertTrue(self.ev("POST", "/images/create",
+                                "fromImage=cortexneurons%2Fvirustotal_3_1%3A3.1&tag=evil"))
+        self.assertEqual(self.ev("POST", "/images/create",
+                                 "fromImage=cortexneurons%2Fvirustotal_3_1%3A3.1&tag=3.1"), [])
+        self.assertTrue(self.ev("POST", "/images/create", "fromImage=x%40sha256%3Aab&tag=1"))
 
     def test_path_tricks_are_not_allowed(self):
         self.assertTrue(self.ev("POST", "/containers/../containers/create/../x"))
@@ -213,6 +245,33 @@ class Server(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"chunked", head.lower())
         bad = await self.request("enforce", self.post(create(Image="alpine"), chunked=True))
         self.assertTrue(bad.startswith(b"HTTP/1.1 403"), bad)
+
+    async def test_pipelined_second_request_is_not_forwarded(self):
+        first = b"GET /_ping HTTP/1.1\r\nHost: d\r\n\r\n"
+        second = self.post(create(HostConfig={"Privileged": True}))
+        await self.request("enforce", first + second)
+        self.assertEqual(len(self.seen), 1)
+        self.assertNotIn(b"containers/create", b"".join(h for h, _ in self.seen))
+
+    async def test_upgrade_requests_are_refused(self):
+        raw = b"POST /containers/abc/attach HTTP/1.1\r\nHost: d\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
+        out = await self.request("enforce", raw)
+        self.assertTrue(out.startswith(b"HTTP/1.1 4"), out)
+        self.assertEqual(self.seen, [])
+
+    async def test_oversized_or_blank_chunk_sizes_are_refused(self):
+        head = b"POST /containers/create HTTP/1.1\r\nHost: d\r\nTransfer-Encoding: chunked\r\n\r\n"
+        for body in (b"FFFFFFFFF\r\n", b"\r\n0\r\n\r\n", b"zz\r\n"):
+            with self.subTest(body=body):
+                out = await self.request("log", head + body)
+                self.assertTrue(out.startswith(b"HTTP/1.1 400"), out)
+        self.assertEqual(self.seen, [])
+
+    async def test_duplicate_key_create_body_is_refused_in_enforce_mode(self):
+        raw = b'{"Image":"mailheaderanalyzer:local","HostConfig":{"Privileged":false,"privileged":true}}'
+        head = b"POST /containers/create HTTP/1.1\r\nHost: d\r\nContent-Length: %d\r\n\r\n" % len(raw)
+        out = await self.request("enforce", head + raw)
+        self.assertTrue(out.startswith(b"HTTP/1.1 403"), out)
 
     async def test_unparseable_create_body_is_refused_in_enforce_mode(self):
         raw = b"POST /containers/create HTTP/1.1\r\nHost: d\r\nContent-Length: 3\r\n\r\n{{{"

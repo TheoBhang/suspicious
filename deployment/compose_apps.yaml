@@ -293,10 +293,19 @@ services:
   # read `docker logs docker_policy_cortex`, then set enforce. Stock Python image,
   # the script is bind-mounted, nothing to build or pull from our registry.
   docker_policy_cortex:
-    image: python:3.12-slim
+    # Pinned by digest: this service is a security boundary, a moving tag must not change it under us.
+    image: python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
     init: true
     restart: unless-stopped
     command: ["python", "-u", "/app/docker_policy_proxy.py"]
+    # GET /_ping through the policy to the socket proxy and the daemon: proves the whole path, and
+    # a bad catalog mount or DOCKER_POLICY_MODE makes the container exit before it ever gets healthy.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',2375,timeout=4); c.request('GET','/_ping'); sys.exit(0 if c.getresponse().status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
     user: "65534:65534"
     read_only: true
     environment:

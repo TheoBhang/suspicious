@@ -194,6 +194,7 @@ Beyond the create body, the policy also:
   catalog replaced by rename stays the old file inside a single-file bind mount, for Cortex as well: run
   `docker compose up -d --force-recreate docker_policy_cortex cortex` after replacing catalogs that way.
   The analyzer and responder catalogs are both read.
+- the socket proxy behind it also drops every capability (haproxy needs none).
 
 It exits at start if a catalog cannot be read, or holds no image, instead of running with an empty
 allow-list. Bind sources are resolved through symlinks (the job directory is mounted read-only into the

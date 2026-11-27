@@ -281,6 +281,8 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       # Not on docker_cortex: Cortex must not be able to reach the raw socket proxy and skip the policy.
       docker_upstream:

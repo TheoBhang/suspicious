@@ -43,6 +43,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv (pinned)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
+# Bring the base image's own pip to a patched release (it is copied into the runtime stage with the rest
+# of /usr/local). pip itself, not uv: uv leaves the old pip-*.dist-info behind, which audits still flag.
+RUN python -m pip install --no-cache-dir --upgrade pip
+
 COPY requirements.txt .
 
 # Install dependencies directly into system python
@@ -109,6 +113,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/log \
     && touch /var/log/cron.log
+
+# This stage starts from its own base image, with its own pip. Upgrade it here too, before the copy:
+# COPY merges the builder's /usr/local over it without deleting, so the old pip-*.dist-info would stay
+# next to the new one and audits would still flag it.
+RUN python -m pip install --no-cache-dir --upgrade pip
 
 # Copy Python environment from builder
 COPY --from=builder /usr/local /usr/local

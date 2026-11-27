@@ -37,17 +37,6 @@ def run_connector_sync(self, connector_name: str):
 
 
 @shared_task(bind=True, acks_late=True, reject_on_worker_lost=True, max_retries=2)
-def run_provider_analysis(self, case_id: int, kind: str, job_id: int):
-    """Forwarder for mail AI jobs queued by the old provider slot before the upgrade: remove after
-    the next release. ``job_id`` is the pk of the report-less ``provider-`` row the old code opened;
-    it runs as a deferred job of ai_model."""
-    # Always ai_model, whatever the row's analyzer source: every provider- row came from the
-    # mail_ai slot, whose only implementer was ai_model (a Cortex-owned AI row must never reach
-    # Cortex's run, nor its breaker).
-    _run_deferred_job(self, job_id, engine="ai_model")
-
-
-@shared_task(bind=True, acks_late=True, reject_on_worker_lost=True, max_retries=2)
 def run_engine_job(self, row_id: int):
     """Run one deferred engine job (StartResult.deferred) and close its ledger row.
     Only a retryable ProviderUnavailable is retried; anything else (an open breaker,
@@ -56,11 +45,11 @@ def run_engine_job(self, row_id: int):
     _run_deferred_job(self, row_id)
 
 
-def _run_deferred_job(task, row_id: int, engine: str = "") -> None:
-    """The body of run_engine_job, shared with the forwarder. ``engine`` overrides the row's
-    analyzer source; when it is not a registered analysis engine the row closes Failure."""
+def _run_deferred_job(task, row_id: int) -> None:
+    """The body of run_engine_job: run the row's engine and close the row. A row whose engine is no
+    longer registered closes Failure."""
     from common.http_client import get_breaker
-    from connectors.base import DATA_TYPE_MAIL_ARCHIVE, FETCH_RESULT, PROVIDER_KIND_ANALYSIS, FetchResult
+    from connectors.base import DATA_TYPE_MAIL_ARCHIVE, FETCH_RESULT, FetchResult
     from connectors.engines import _external_job_id
     from connectors.providers import ProviderUnavailable
     from connectors.registry import registry
@@ -72,13 +61,6 @@ def _run_deferred_job(task, row_id: int, engine: str = "") -> None:
         return  # gone or closed already (redelivery, or fail_stale_jobs got there first)
     name, analyzer_name, case_id = row.analyzer.source, row.analyzer.name, row.case_id
     started = time.monotonic()
-    if engine:
-        name = engine
-        if name not in registry.providers(PROVIDER_KIND_ANALYSIS):
-            _close_engine_job(row_id, name, analyzer_name, None,
-                              FetchResult(FETCH_RESULT, "Failure", payload={"reason": "no engine for this job"}),
-                              attempt=task.request.retries + 1, duration_ms=0)
-            return
     result, error, connector = None, "engine returned no result", None
     try:
         connector = registry.instantiate(name)

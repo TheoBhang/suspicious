@@ -40,6 +40,7 @@ def _level(value: str) -> str:
 
 
 class FixtureEngineConnector(Connector):
+    deactivate_when_empty = True  # inert or disabled: its Fixture_* rows must not weigh in the Settings guard
     manifest = ConnectorManifest(
         name="fixture_engine",
         version="1.0.0",

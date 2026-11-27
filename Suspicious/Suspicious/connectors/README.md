@@ -100,9 +100,8 @@ connectors/
   `on_result` instead of `fetch`, and
   `connectors.tasks.run_engine_job` runs its jobs. `general_purpose = False` marks a partial
   engine (`ai_model`). See [Connectors](../../../docs/components/backend/connectors.md).
-  The `mail_ai` provider slot (`analyze`, `ProviderResult`) is removed;
-  `connectors.tasks.run_provider_analysis` only forwards `provider-` rows queued before the
-  upgrade, for one release.
+  The `mail_ai` provider slot (`analyze`, `ProviderResult`) is removed, and so is its one-release
+  forwarder task `run_provider_analysis`.
 
 ---
 

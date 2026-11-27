@@ -186,6 +186,9 @@ def _analyzer_row(name, entry, analyzer_id):
             if row.source != name and _adoptable(entry, row.analyzer_cortex_id):
                 row.source = name
                 row.save(update_fields=["source"])
+            if row.source == name and not row.is_active:  # the engine is using it: it is active again
+                row.is_active = True
+                row.save(update_fields=["is_active"])
             return row
     return CortexJob.get_analyzer_db(dataclasses.replace(entry, id=analyzer_id), source=name)
 
@@ -535,6 +538,8 @@ def sync_connector_catalog(name: str, connector) -> int:
 
     offered = connector.catalog()
     if not offered:
+        if getattr(connector, "deactivate_when_empty", False):
+            Analyzer.objects.filter(source=name).update(is_active=False)
         return 0
 
     synced, ai_name = [], ai_analyzer_name()

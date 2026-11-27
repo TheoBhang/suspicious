@@ -19,11 +19,22 @@ CONFIG = {"url": "http://cortex:9001/", "api_key": "k", "webhook_secret": "s3cre
 ENTRY = CatalogEntry(id="a1", name="Yara_1_0", data_types=("file",))
 
 
+class ClosedBreaker(SimpleTestCase):
+    """The "cortex" breaker is one per process and a failing call now counts towards it: every test
+    that talks to the connector starts with it closed, and leaves it closed."""
+
+    def setUp(self):
+        from common.http_client import get_breaker
+        self.breaker = get_breaker("cortex")
+        self.breaker.close()
+        self.addCleanup(self.breaker.close)
+
+
 def conn(config=None):
     return CortexConnector(config=CONFIG if config is None else config)
 
 
-class CatalogTest(SimpleTestCase):
+class CatalogTest(ClosedBreaker):
     def test_by_type(self):
         analyzer = SimpleNamespace(id="a1", name="Yara_1_0", dataTypeList=["file", "mail_body"])
         with mock.patch(API) as api:
@@ -60,7 +71,7 @@ class CatalogTest(SimpleTestCase):
             self.assertEqual([(e.id, e.name) for e in conn().catalog()], [("i1", "A1")])
 
 
-class StartTest(SimpleTestCase):
+class StartTest(ClosedBreaker):
     def test_file_payload(self):
         with mock.patch(API) as api:
             api.return_value.analyzers.run_by_name.return_value = SimpleNamespace(id="j1")
@@ -96,12 +107,75 @@ class StartTest(SimpleTestCase):
                     ServerError("timeout"), requests.ConnectionError("x"),
                     requests.HTTPError("503")):
             with mock.patch(API) as api, self.subTest(exc=type(exc).__name__):
+                self.breaker.close()   # five outages in one test would otherwise trip it
                 api.return_value.analyzers.run_by_name.side_effect = exc
                 with self.assertRaises(type(exc)):
                     conn().start(ENTRY, "file", "v")
 
 
-class ClientReuseTest(SimpleTestCase):
+class BreakerTest(ClosedBreaker):
+    """start and the filtered catalogue lookups talk to Cortex, so they run under its breaker like
+    fetch does: an outage stops costing a timeout per analyzer once the breaker is open, and an answer
+    (a refusal, a missing analyzer) is never counted as an outage."""
+
+    def trip(self, call):
+        from common.http_client import BREAKER_FAIL_MAX
+        for _ in range(BREAKER_FAIL_MAX):
+            try:
+                call()
+            except Exception:  # noqa: BLE001  # the outage, then the breaker's own error
+                pass
+
+    def test_repeated_start_outages_open_the_breaker(self):
+        with mock.patch(API) as api:
+            run = api.return_value.analyzers.run_by_name
+            run.side_effect = ConnectionError("down")
+            self.trip(lambda: conn().start(ENTRY, "file", "x"))
+            before = run.call_count
+            with self.assertRaises(pybreaker.CircuitBreakerError):
+                conn().start(ENTRY, "file", "x")
+            self.assertEqual(run.call_count, before)          # Cortex is not called while it is open
+
+    def test_a_refusal_is_not_an_outage(self):
+        from common.http_client import BREAKER_FAIL_MAX
+        with mock.patch(API) as api:
+            run = api.return_value.analyzers.run_by_name
+            run.side_effect = InvalidInputError("bad input")
+            for _ in range(BREAKER_FAIL_MAX + 3):
+                self.assertIsNone(conn().start(ENTRY, "file", "x"))
+            run.side_effect = None
+            run.return_value = SimpleNamespace(id="j1")
+            self.assertEqual(conn().start(ENTRY, "file", "x"), StartResult(job_id="j1"))
+
+    def test_repeated_lookup_outages_open_the_breaker_and_the_catalogue_is_empty(self):
+        with mock.patch(API) as api:
+            get = api.return_value.analyzers.get_by_type
+            get.side_effect = ConnectionError("down")
+            self.trip(lambda: conn().catalog(data_type="file"))
+            before = get.call_count
+            self.assertEqual(conn().catalog(data_type="file"), [])
+            self.assertEqual(get.call_count, before)
+
+    def test_a_missing_analyzer_is_not_an_outage(self):
+        from common.http_client import BREAKER_FAIL_MAX
+        with mock.patch(API) as api:
+            api.return_value.analyzers.get_by_name.side_effect = NotFoundError("x")
+            for _ in range(BREAKER_FAIL_MAX + 3):
+                self.assertEqual(conn().catalog(name="Nope_1_0"), [])
+            api.return_value.analyzers.get_by_name.side_effect = None
+            api.return_value.analyzers.get_by_name.return_value = SimpleNamespace(
+                id="a1", name="Yara_1_0", dataTypeList=["file"])
+            self.assertEqual(len(conn().catalog(name="Yara_1_0")), 1)
+
+    def test_an_open_breaker_is_shared_with_fetch(self):
+        with mock.patch(API) as api:
+            api.return_value.analyzers.run_by_name.side_effect = ConnectionError("down")
+            self.trip(lambda: conn().start(ENTRY, "file", "x"))
+            self.assertEqual(conn().fetch("j1"), FetchResult("unknown"))
+            api.return_value.jobs.get_by_id.assert_not_called()   # the open breaker stopped it
+
+
+class ClientReuseTest(ClosedBreaker):
     def test_one_client_per_instance(self):
         with mock.patch(API) as api:
             api.return_value.analyzers.get_by_type.return_value = []
@@ -114,7 +188,7 @@ class ClientReuseTest(SimpleTestCase):
         api.assert_called_once()
 
 
-class FetchTest(SimpleTestCase):
+class FetchTest(ClosedBreaker):
     def test_result(self):
         job = SimpleNamespace(status="Success", dataType="file")
         report = SimpleNamespace(report={"summary": {"dataType": "file"}, "full": {"a": 1}})

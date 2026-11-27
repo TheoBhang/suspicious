@@ -89,11 +89,10 @@ observable: only an analyzer whose `CatalogEntry.data_types` declares `mail_arch
 name is the AI role (`integrations.cortex.analyzers.ai`, default `AI_Mail_Analyzer`) is started
 on it. Every deferred job of this release is a `mail_archive` job.
 
-Rows opened before the upgrade by the retired `mail_ai` provider slot (`provider-<hex>` ids, no
-report) still finish: the old Celery task `connectors.tasks.run_provider_analysis` stays for one
-release as a forwarder into the same code as `run_engine_job`, always through `ai_model` (the
-slot's only implementer), whatever the row's analyzer source; with `ai_model` not registered the
-row closes `Failure` ("no engine for this job").
+Rows opened by the retired `mail_ai` provider slot (`provider-<hex>` ids, no report) are no longer
+forwarded: the one-release Celery task `connectors.tasks.run_provider_analysis` is removed. Such a row
+still pending closes through `fail_stale_jobs` like any stale job (up to 2 h, and the mail finalises
+without the AI vote), so upgrade through 1.9.0 or let the Celery queue drain first.
 
 ## cortex
 

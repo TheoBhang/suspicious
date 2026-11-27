@@ -58,6 +58,18 @@ def _is_inert(name: str) -> bool:
         return True
 
 
+def _sync_dev_engine_rows(name: str) -> None:
+    """A dev-only engine (Connector.deactivate_when_empty) keeps its Analyzer rows active only while it
+    is enabled and can work: the Settings weight guard counts active rows. Re-enabling needs nothing
+    here: the engine reactivates a row when it uses it."""
+    from cortex_job.models import Analyzer
+
+    if not getattr(registry.get(name), "deactivate_when_empty", False):
+        return
+    if not get_state(name).enabled or _is_inert(name):
+        Analyzer.objects.filter(source=name).update(is_active=False)
+
+
 def _compute_status(name: str, config_schema, enabled: bool, section: dict) -> str:
     """Disabled/partial/connected: mirrors Watcher's own connector status
     logic. No 'disconnected' state: Watcher's badge config defines one but
@@ -164,6 +176,7 @@ class ConnectorStateView(APIView):
             state = get_state(name)
             state.enabled = enabled
             state.save(update_fields=["enabled", "updated_at"])
+            _sync_dev_engine_rows(name)
         return Response(ConnectorSerializer(_serialize_connector(name)).data)
 
 
@@ -294,6 +307,7 @@ class ConnectorConfigView(APIView):
             scope="backend", key=key, defaults={"value": non_secret}
         )
         invalidate_cache(key)
+        _sync_dev_engine_rows(name)
         return Response({"config": _mask_secret_leaves(payload, schema)})
 
 

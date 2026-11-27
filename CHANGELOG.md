@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrading
 
+- **`connectors.tasks.run_provider_analysis` is removed** (it was a one-release forwarder). Upgrade from
+  1.8.x through 1.9.0, or let the Celery queue drain first: a mail AI job queued by 1.8.x code that
+  reaches a worker after this release is rejected as an unregistered task, its row waits for
+  `fail_stale_jobs` (up to 2 h) and the mail finalises without the AI vote.
+
 - **Before upgrading, check that Settings > Connectors shows the Cortex connector ENABLED.** Until
   this release its enabled flag only gated the analyzer sync; it now gates every new Cortex job, so a
   Cortex connector switched off earlier stops all new Cortex analysis after the upgrade. The webhook
@@ -183,6 +188,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ai_inference` no longer mounts `models_public/`.
 
 ### Changed
+
+- The Cortex connector's `start` and filtered catalogue lookups run under the `cortex` circuit breaker,
+  like `fetch`: while Cortex is down, dispatch stops costing a timeout per analyzer once the breaker is
+  open (the call that opens it raises `CircuitBreakerError`). A refusal (`InvalidInputError`) or a missing
+  analyzer is an answer and never counts as an outage.
+- A dev-only engine (the fixture engine) deactivates its `Fixture_*` analyzer rows when it is disabled or
+  unconfirmed, so they stop counting in the Settings weight guard; an engine reactivates an inactive row of
+  its own when it uses it.
 
 - Analysis engine layer (`connectors/engines.py`): every analysis job is started, fetched and
   announced through enabled `analysis` connectors (contract `catalog`, `start`, `fetch`, `webhook`;

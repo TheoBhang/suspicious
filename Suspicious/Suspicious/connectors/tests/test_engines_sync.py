@@ -70,6 +70,17 @@ class SyncCatalogTest(TestCase):
         self.assertEqual(engines.sync_catalog("fake"), 0)
         self.assertTrue(Analyzer.objects.get(name="old").is_active)
 
+    def test_a_dev_engine_with_an_empty_catalogue_deactivates_its_rows(self):
+        """The fixture engine offers nothing when it is not confirmed: its rows must not stay active
+        (they count in the Settings weight guard). Cortex's empty answer still changes nothing."""
+        self.fake.deactivate_when_empty = True
+        Analyzer.objects.create(name="old", analyzer_cortex_id="fake:o", source="fake")
+        Analyzer.objects.create(name="cx", analyzer_cortex_id="c", source="cortex")
+        self.fake.offered = []
+        self.assertEqual(engines.sync_catalog("fake"), 0)
+        self.assertFalse(Analyzer.objects.get(name="old").is_active)
+        self.assertTrue(Analyzer.objects.get(name="cx").is_active)
+
     def test_unfiltered_cortex_catalog_raises_on_connection_error(self):
         connector = CortexConnector({"url": "http://cortex:9001", "api_key": "k"})
         with mock.patch("cortex_job.cortex_utils.session_cortex_api.SessionCortexApi.do_get",
@@ -103,3 +114,17 @@ class SyncCatalogTest(TestCase):
             self.assertIsNone(sync_cortex_analyzers())
             with self.assertRaises(requests.ConnectionError):
                 sync_cortex_analyzers(strict=True)
+
+
+class AnalyzerRowReactivationTest(TestCase):
+    def test_an_engine_that_uses_its_inactive_row_reactivates_it(self):
+        Analyzer.objects.create(name="A1", analyzer_cortex_id="fake:iA1", source="fake", is_active=False)
+        row = engines._analyzer_row("fake", entry("A1"), "fake:iA1")
+        row.refresh_from_db()
+        self.assertTrue(row.is_active)
+
+    def test_another_sources_inactive_row_is_left_alone(self):
+        Analyzer.objects.create(name="A1", analyzer_cortex_id="cx:1", source="cortex", is_active=False)
+        row = engines._analyzer_row("fake", entry("A1"), "fake:iA1")
+        row.refresh_from_db()
+        self.assertEqual((row.source, row.is_active), ("cortex", False))

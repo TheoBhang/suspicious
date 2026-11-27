@@ -207,6 +207,9 @@ class Connector(ABC):
 
     manifest: ClassVar[ConnectorManifest]
     general_purpose: ClassVar[bool] = True
+    # True for a dev-only engine whose analyzers must not stay active while it offers nothing or is off:
+    # an empty catalogue then deactivates its Analyzer rows (Cortex's empty answer changes nothing).
+    deactivate_when_empty: ClassVar[bool] = False
 
     def __init__(self, config: dict):
         self.config = config

@@ -132,9 +132,17 @@ class CortexConnector(Connector):
     def catalog(self, data_type: str | None = None, name: str | None = None) -> list[CatalogEntry]:
         if not data_type and not name:
             return self._full_catalog()
+        from cortex4py.exceptions import NotFoundError
+
+        from common.http_client import get_breaker
+
         try:
             api = self._api()
-            found = api.analyzers.get_by_name(name) if name else api.analyzers.get_by_type(data_type)
+            with get_breaker("cortex").calling():  # an outage opens it; an answer (even "not found") does not
+                try:
+                    found = api.analyzers.get_by_name(name) if name else api.analyzers.get_by_type(data_type)
+                except NotFoundError:
+                    found = None
             found = [found] if name and found else found  # None: a role Cortex does not offer
             return [
                 CatalogEntry(a.id, a.name, tuple(getattr(a, "dataTypeList", None) or ()))
@@ -170,13 +178,19 @@ class CortexConnector(Connector):
         }
         from cortex4py.exceptions import InvalidInputError
 
+        from common.http_client import get_breaker
+
         # Only a refusal is None: cortex4py maps a 4xx other than 401/403/404 to
-        # InvalidInputError. An outage (auth, connection, timeout, 5xx) propagates.
-        try:
-            report = self._api().analyzers.run_by_name(analyzer.name, payload)
-        except InvalidInputError as exc:
-            logger.warning("Analyzer %r rejected %s input: %s", analyzer.name, data_type, type(exc).__name__)
-            return None
+        # InvalidInputError. An outage (auth, connection, timeout, 5xx) propagates, and counts
+        # towards the "cortex" breaker like fetch does; once it is open, start raises
+        # CircuitBreakerError at once instead of costing a timeout per analyzer.
+        api = self._api()
+        with get_breaker("cortex").calling():
+            try:
+                report = api.analyzers.run_by_name(analyzer.name, payload)
+            except InvalidInputError as exc:  # an answer, not an outage: never counted
+                logger.warning("Analyzer %r rejected %s input: %s", analyzer.name, data_type, type(exc).__name__)
+                return None
         return StartResult(job_id=report.id) if report else None
 
     def fetch(self, job_id: str) -> FetchResult:

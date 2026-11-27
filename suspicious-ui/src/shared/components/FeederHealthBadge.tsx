@@ -47,7 +47,7 @@ function fmtDuration(seconds: number): string {
   return `${Math.round(seconds / 3600)} h`;
 }
 
-export type FeederHealthBadgeProps = {
+type FeederHealthBadgeProps = {
   /** Set false to skip the polling query (e.g. user not Admin/CERT). */
   enabled?: boolean;
   /** Override label prefix shown before the tone (defaults to "Feeder"). */
@@ -91,7 +91,7 @@ export default function FeederHealthBadge({
             />
           ) : null}
           {health.online && health.checks?.minio ? (
-            <Row k="MinIO" v={health.checks.minio.ok ? "OK" : "stale"} />
+            <Row k="Object store" v={health.checks.minio.ok ? "OK" : "stale"} />
           ) : null}
           {health.error ? <Row k="Reason" v={health.error} /> : null}
           <Row k="Checked" v={fmtUnix(health.checked_at)} />

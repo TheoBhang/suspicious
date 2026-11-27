@@ -5,22 +5,6 @@ import type {
   SubmitSuccessResponse,
 } from "@/features/submit/types";
 
-export async function submitUrl(input: {
-  url: string;
-  context?: string;
-}): Promise<SubmitSuccessResponse> {
-  const res = await api.post("/submit/url/", input);
-  return res.data;
-}
-
-export async function submitIoc(input: {
-  value: string;
-  context?: string;
-}): Promise<SubmitSuccessResponse> {
-  const res = await api.post("/submit/other/", input);
-  return res.data;
-}
-
 export async function submitFile(input: {
   file: File;
   context?: string;
@@ -40,7 +24,7 @@ export async function submitIndicators(input: {
   return res.data;
 }
 
-export type ExtractIocsResponse = {
+type ExtractIocsResponse = {
   status: "success";
   indicators: string;
   found: number;

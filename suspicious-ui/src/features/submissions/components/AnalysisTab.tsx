@@ -3,7 +3,7 @@ import type { SubmissionAnalyzerReport, UrlArtifact } from "@/features/submissio
 import { AnalyzerGroups, Heading } from "@/features/submissions/components/AnalyzerGroups";
 import { UrlGroupList } from "@/features/submissions/components/UrlGroupList";
 
-export type AnalysisTabProps = {
+type AnalysisTabProps = {
   submissionId: number;
   reports: SubmissionAnalyzerReport[];
   urlArtifacts: UrlArtifact[];

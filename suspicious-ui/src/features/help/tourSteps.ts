@@ -11,7 +11,7 @@ export const GLOBAL_STEPS: Step[] = [
   {
     target: '[data-tour="nav-workspace"]',
     title: "Your workspace",
-    content: "Investigations, campaigns, and alerts live in this group.",
+    content: "Campaigns, the dashboard and, for analysts, Investigation live in this group.",
     placement: "right",
   },
   {
@@ -28,7 +28,7 @@ export const GLOBAL_STEPS: Step[] = [
   },
 ];
 
-export const PAGE_STEPS: Record<string, Step[]> = {
+const PAGE_STEPS: Record<string, Step[]> = {
   "/submit": [
     {
       target: '[data-tour="submit-form"]',

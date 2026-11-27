@@ -29,7 +29,7 @@ export type DashboardSummary = {
 
 export type DashboardScopes = { default: string; options: ScopeOption[] };
 
-export type GetDashboardSummaryParams = {
+type GetDashboardSummaryParams = {
   month: number;
   year: number;
   scope?: string;

@@ -30,27 +30,6 @@ export function InnerCard(props: React.PropsWithChildren<{ sx?: object; hover?: 
   );
 }
 
-export function NavIcon({ icon, isDark }: { icon: React.ReactNode; isDark: boolean }) {
-  const theme = useTheme();
-  return (
-    <Box
-      sx={{
-        width: 32,
-        height: 32,
-        borderRadius: 2,
-        display: "grid",
-        placeItems: "center",
-        border: `1px solid ${alpha(theme.palette.divider, isDark ? 0.18 : 0.6)}`,
-        background: "linear-gradient(135deg, rgba(56,189,248,.14), rgba(120,119,198,.12))",
-        flexShrink: 0,
-        "& svg": { fontSize: 17 },
-      }}
-    >
-      {icon}
-    </Box>
-  );
-}
-
 export function EmptyList({ message }: { message: string }) {
   return (
     <Stack spacing={1} sx={{ py: 5, alignItems: "center", justifyContent: "center" }}>

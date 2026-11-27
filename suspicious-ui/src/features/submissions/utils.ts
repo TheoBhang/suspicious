@@ -18,8 +18,6 @@ export {
   fmtDate,
   kindLabel,
   groupReportsByArtifact,
-  type ReportGroup,
-  type ReportLike,
 } from "@/shared/lib/scoreUtils";
 import { getRiskTone } from "@/shared/lib/scoreUtils";
 

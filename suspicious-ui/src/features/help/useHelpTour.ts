@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-export interface HelpTourValue {
+interface HelpTourValue {
   start: () => void;
 }
 

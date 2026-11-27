@@ -35,7 +35,6 @@ export const enrichmentSchema = z.object({
   threat_label: z.string().optional(),
 });
 
-export type Vendor = z.infer<typeof vendorSchema>;
 export type Enrichment = z.infer<typeof enrichmentSchema>;
 
 export function parseEnrichment(x: unknown): Enrichment | undefined {

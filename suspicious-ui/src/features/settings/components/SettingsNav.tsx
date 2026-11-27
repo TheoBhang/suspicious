@@ -7,7 +7,7 @@ import { GROUPS, type SectionKey } from "@/features/settings/components/sections
 import { SoftCard } from "@/features/settings/components/cards";
 import { visuallyHidden } from "@/features/settings/components/a11y";
 
-export type SettingsNavProps = {
+type SettingsNavProps = {
   active: SectionKey;
   unsaved: ReadonlySet<SectionKey>;
   /** Sections the user may not see right now (role or disabled connector). */

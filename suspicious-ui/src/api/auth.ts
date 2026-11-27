@@ -23,7 +23,7 @@ export type Me = {
   auto_seasonal?: boolean;
 };
 
-export type LoginResponse = {
+type LoginResponse = {
   token?: string;
   expiry: string | null;
   user: {

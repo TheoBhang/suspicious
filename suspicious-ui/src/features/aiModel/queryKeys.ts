@@ -5,7 +5,6 @@ export const aiModelKeys = {
   versions: (p?: object) => ["ai-model", "versions", p ?? {}] as const,
   candidates: (p?: object) => ["ai-model", "candidates", p ?? {}] as const,
   shadow: (p?: object) => ["ai-model", "shadow", p ?? {}] as const,
-  reviews: (p?: object) => ["ai-model", "reviews", p ?? {}] as const,
   jobs: (p?: object) => ["ai-model", "jobs", p ?? {}] as const,
   ledger: () => ["ai-model", "ledger"] as const,
   flags: (p?: object) => ["ai-model", "flags", p ?? {}] as const,

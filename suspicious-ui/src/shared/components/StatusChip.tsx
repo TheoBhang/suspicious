@@ -12,7 +12,7 @@ import { useStatusColors } from "@/styles/colorStore";
 import { Badge } from "@/shared/components/Badge";
 import type { StatusKey } from "@/styles/colorStore";
 
-export type SubmissionStatus =
+type SubmissionStatus =
   | "NEW"
   | "IN_PROGRESS"
   | "DONE"

@@ -12,9 +12,9 @@ export type SceneApi = {
   reset(): void;
 };
 
-export type Cloud = { key: string; colour: string; centre: Vec3; axes: [Vec3, Vec3, Vec3]; radii: Vec3 };
+type Cloud = { key: string; colour: string; centre: Vec3; axes: [Vec3, Vec3, Vec3]; radii: Vec3 };
 
-export type SceneProps = {
+type SceneProps = {
   /** Scene coordinates (the cloud normalised into the box -1..1), one per point. */
   positions: Vec3[];
   colours: string[];

@@ -4,7 +4,7 @@ import { alpha, useTheme } from "@mui/material/styles";
 import { useThemeMode } from "@/styles/ThemeStore";
 
 
-export type SoftCardProps = React.PropsWithChildren<{
+type SoftCardProps = React.PropsWithChildren<{
   title: string;
   icon?: React.ReactNode;
   /** Short line under the title. */

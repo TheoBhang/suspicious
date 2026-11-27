@@ -21,14 +21,14 @@ import { EditableListPanel } from "@/features/settings/components/EditableListPa
 import { FeederPanel } from "@/features/settings/components/FeederPanel";
 import { ScoringTable } from "@/features/settings/components/ScoringTable";
 
-export type SectionKind = "list" | "toggle" | "scoring" | "ciso_users" | "domain_pair" | "connectors" | "ai_model";
+type SectionKind = "list" | "toggle" | "scoring" | "ciso_users" | "domain_pair" | "connectors" | "ai_model";
 
 /** Sidebar keys: backend settings sections plus UI-only panels. */
 export type SectionKey = SettingsSection | "connectors" | "ai_model";
 
-export type SectionGroupKey = "lists" | "access" | "ingestion" | "scoring" | "integrations";
+type SectionGroupKey = "lists" | "access" | "ingestion" | "scoring" | "integrations";
 
-export type SectionMeta = {
+type SectionMeta = {
   key: SectionKey;
   group: SectionGroupKey;
   title: string;

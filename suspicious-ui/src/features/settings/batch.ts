@@ -1,4 +1,4 @@
-export type BatchResult<T> = { ok: T[]; failed: { item: T; error: unknown }[] };
+type BatchResult<T> = { ok: T[]; failed: { item: T; error: unknown }[] };
 
 /**
  * Sequential on purpose: the server load stays what the old await-loops

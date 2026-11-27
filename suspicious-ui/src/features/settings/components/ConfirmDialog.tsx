@@ -2,7 +2,7 @@ import * as React from "react";
 import { useAccent } from "@/features/settings/useAccent";
 import { Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle } from "@mui/material";
 
-export type ConfirmDialogProps = {
+type ConfirmDialogProps = {
   open: boolean;
   title: string;
   body: React.ReactNode;

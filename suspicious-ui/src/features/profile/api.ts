@@ -27,7 +27,7 @@ export type UserProfile = {
   last_update:   string;
 };
 
-export type AppearancePayload = {
+type AppearancePayload = {
   theme?:           string;
   auto_seasonal?:   boolean;
   avatar?:          AvatarConfig;
@@ -37,14 +37,14 @@ export type AppearancePayload = {
   };
 };
 
-export type PreferencesPayload = {
+type PreferencesPayload = {
   wants_acknowledgement?: boolean;
   wants_results?:         boolean;
   tour_completed?:        boolean;
   sidebar_pinned?:        boolean;
 };
 
-export type SemanticColorsPayload = {
+type SemanticColorsPayload = {
   semantic_colors: {
     result?: Partial<ResultColors>;
     status?: Partial<StatusColors>;

@@ -7,7 +7,7 @@ import { SoftCard } from "@/shared/components/SoftCard";
 
 export { SoftCard };
 
-export type ModeOption<T extends string> = {
+type ModeOption<T extends string> = {
   value: T;
   title: string;
   subtitle: string;

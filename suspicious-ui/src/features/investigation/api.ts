@@ -161,7 +161,7 @@ export type InvestigationDetails = {
   [key: string]: unknown;
 };
 
-export type InvestigationListParams = {
+type InvestigationListParams = {
   page?: number;
   pageSize?: number;
   search?: string;

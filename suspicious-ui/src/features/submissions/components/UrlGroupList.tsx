@@ -40,7 +40,7 @@ const STATUS_COLOR: Record<
 
 // Component
 
-export interface UrlGroupListProps {
+interface UrlGroupListProps {
   submissionId: number;
   urls: UrlArtifact[];
 }

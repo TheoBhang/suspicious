@@ -16,7 +16,7 @@ export type GlyphSmokePalette = {
   ripple: Rgb;
 };
 
-export const DEFAULT_PALETTE: GlyphSmokePalette = {
+const DEFAULT_PALETTE: GlyphSmokePalette = {
   bg: "#151515",
   base: [52, 100, 150],
   dense: [104, 166, 200],
@@ -48,7 +48,7 @@ export type GlyphSmoke = {
   debug: { freeze: boolean; spawn(x: number, y: number, age: number): void; clear(): void };
 };
 
-export type GlyphSmokeOptions = {
+type GlyphSmokeOptions = {
   logoUrl: string;
   palette?: Partial<GlyphSmokePalette>;
   /** Draw a single still frame: no loop, no pointer response. */

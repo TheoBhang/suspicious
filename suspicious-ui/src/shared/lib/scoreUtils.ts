@@ -1,6 +1,6 @@
 
 /** Minimal shape these helpers read off an analyzer report. */
-export type ReportLike = {
+type ReportLike = {
   score?: number | null;
   confidence?: number | null;
   analyzer_name?: string | null;
@@ -164,7 +164,7 @@ export function kindLabel(kind: string) {
 }
 
 
-export type ReportGroup<T = ReportLike> = {
+type ReportGroup<T = ReportLike> = {
   key: string;
   kind: string;
   value: string;

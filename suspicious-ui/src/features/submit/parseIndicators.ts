@@ -1,5 +1,5 @@
-export type IndicatorType = "url" | "ip" | "hash" | "domain" | null;
-export interface ParsedIndicator { raw: string; value: string; type: IndicatorType; }
+type IndicatorType = "url" | "ip" | "hash" | "domain" | null;
+interface ParsedIndicator { raw: string; value: string; type: IndicatorType; }
 
 const HASH = /^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$/;
 const IPV4 = /^((0|[1-9]\d{0,2})\.){3}(0|[1-9]\d{0,2})$/;

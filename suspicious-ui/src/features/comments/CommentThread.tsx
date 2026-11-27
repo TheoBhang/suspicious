@@ -8,7 +8,7 @@ function fmtCommentDate(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-export type CommentThreadProps = {
+type CommentThreadProps = {
   title: string;
   comments: CaseComment[];
   isLoading: boolean;

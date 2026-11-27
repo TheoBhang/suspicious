@@ -25,7 +25,7 @@ import { useAccent } from "@/features/settings/useAccent";
 import { listDeliveries, type ConnectorDelivery } from "@/features/settings/components/connectors";
 import { DELIVERY_STATUS_LABEL } from "@/features/settings/labels";
 
-export const DELIVERY_LIMIT = 10;
+const DELIVERY_LIMIT = 10;
 const LONG_ERROR = 80;
 // The detail pane is about 520px wide at 1440 and the page is 390px on a phone, so the fold follows the table's own width, not the viewport.
 const WIDE = "@container (min-width: 720px)";

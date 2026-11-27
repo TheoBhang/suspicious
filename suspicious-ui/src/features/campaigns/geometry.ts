@@ -1,13 +1,13 @@
 // Pure maths for the 3D embedding map: no three.js import, so all of it is unit-tested without WebGL.
 
 export type Vec3 = [number, number, number];
-export type XYZ = { x: number; y: number; z: number };
+type XYZ = { x: number; y: number; z: number };
 
 const xyz = (p: XYZ): Vec3 => [p.x, p.y, p.z];
 
 // ---------------------------------------------------------------- bounds and scale
 
-export type Bounds = { min: Vec3; max: Vec3; center: Vec3; extent: Vec3 };
+type Bounds = { min: Vec3; max: Vec3; center: Vec3; extent: Vec3 };
 
 /** The box around the points; null when there are none. */
 export function bounds(points: XYZ[]): Bounds | null {
@@ -30,7 +30,7 @@ export function bounds(points: XYZ[]): Bounds | null {
 }
 
 /** scene = (real - offset) * scale. One scale for all three axes, so distances keep their proportions. */
-export type Normalisation = { offset: Vec3; scale: number };
+type Normalisation = { offset: Vec3; scale: number };
 
 /** Fits the points in the box -1..1 (the widest axis touches it). Always finite, whatever the points. */
 export function normalise(points: XYZ[]): Normalisation {
@@ -44,7 +44,7 @@ export const toScene = (p: Vec3, n: Normalisation): Vec3 => [(p[0] - n.offset[0]
 
 // ---------------------------------------------------------------- category clouds
 
-export type Ellipsoid = { center: Vec3; axes: [Vec3, Vec3, Vec3]; radii: Vec3 };
+type Ellipsoid = { center: Vec3; axes: [Vec3, Vec3, Vec3]; radii: Vec3 };
 
 /** Fewer points than this and a covariance says little: no cloud is drawn. */
 export const MIN_CLOUD_POINTS = 5;
@@ -120,7 +120,7 @@ export function categoryEllipsoid(points: XYZ[]): Ellipsoid | null {
 
 // ---------------------------------------------------------------- neighbours
 
-export type Near = { index: number; distance: number };
+type Near = { index: number; distance: number };
 
 /** How many nearest messages the map highlights and the side panel lists: one number, so the two always agree. */
 export const NEAREST = 8;

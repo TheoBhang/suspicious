@@ -26,7 +26,6 @@ export const useAiModelCandidates = list(aiModelKeys.candidates, api.getCandidat
 /** Keeps the old page on screen while another page of a sub-list loads or after a review. */
 export const useAiModelShadow = (params?: api.PageParams, poll = false) =>
   useQuery({ queryKey: aiModelKeys.shadow(params), queryFn: () => api.getShadow(params), retry: false, placeholderData: keepPreviousData, refetchInterval: poll ? 10_000 : false });
-export const useAiModelReviews = list(aiModelKeys.reviews, api.getReviews);
 /** Keep the old page on screen while another loads, so an open resolve dialog stays mounted. */
 export const useAiModelFlags = (params?: api.PageParams) =>
   useQuery({ queryKey: aiModelKeys.flags(params), queryFn: () => api.getFlags(params), retry: false, placeholderData: keepPreviousData });

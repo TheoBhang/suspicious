@@ -3,7 +3,7 @@ import { endpoints } from "@/api/endpoints";
 
 const base = endpoints.aiModel;
 
-export type Paged<T> = { count: number; next: string | null; previous: string | null; results: T[] };
+type Paged<T> = { count: number; next: string | null; previous: string | null; results: T[] };
 /** limit/offset, or the per-prefix keys of the shadow and queue sub-lists (e.g. flips_limit). */
 export type PageParams = Record<string, number | string | undefined>;
 
@@ -101,10 +101,9 @@ export type ShadowDetail = VersionSummary & {
     alerts: SubList<{ case_id: number; side: "candidate" | "active" }>;
   };
 };
-export type ShadowResponse = { shadow: null } | ShadowDetail;
+type ShadowResponse = { shadow: null } | ShadowDetail;
 
 export type ReviewKind = "flip" | "campaign";
-export type ReviewRow = { version_id: string; kind: ReviewKind; case_id: number; user: string | null; note: string; at: string };
 
 export type LabelMix = {
   now: Record<string, number>;
@@ -133,15 +132,14 @@ export type QueueResponse = {
 const get = async <T>(path: string, params?: PageParams): Promise<T> => (await api.get(`${base}${path}`, { params })).data;
 const post = async <T>(path: string, body: object = {}): Promise<T> => (await api.post(`${base}${path}`, body)).data;
 
-export type Note = { note?: string };
+type Note = { note?: string };
 /** version_id: the version the screen shows, so a stale screen is refused (409 state_changed). */
-export type VersionAction = Note & { version_id?: string };
+type VersionAction = Note & { version_id?: string };
 
 export const getStatus = () => get<AiModelStatus>("status/");
 export const getVersions = (p?: PageParams) => get<Paged<VersionRow>>("versions/", p);
 export const getCandidates = (p?: PageParams) => get<Paged<CandidateRow>>("candidates/", p);
 export const getShadow = (p?: PageParams) => get<ShadowResponse>("shadow/", p);
-export const getReviews = (p?: PageParams) => get<Paged<ReviewRow>>("reviews/", p);
 export const getJobs = (p?: PageParams) => get<Paged<JobRow>>("jobs/", p);
 export const getLedger = () => get<LedgerResponse>("ledger/");
 export const getFlags = (p?: PageParams) => get<Paged<FlagRow>>("flags/", p);

@@ -15,7 +15,7 @@ const SIDE: Record<"candidate" | "active", string> = {
   active: "Only the current model raises a campaign alert",
 };
 
-export const CaseLink = ({ id }: { id: number }) => (
+const CaseLink = ({ id }: { id: number }) => (
   <Link component={RouterLink} to={`/investigation?open=${id}`}>{id}</Link>
 );
 

@@ -25,7 +25,7 @@ import { EntryDate } from "@/features/settings/components/EntryDate";
 import { EmptyList } from "@/features/settings/components/cards";
 import { EditableListPanel } from "@/features/settings/components/EditableListPanel";
 
-export function ReadOnlyListPanel({
+function ReadOnlyListPanel({
   section,
   title,
   subtitle,

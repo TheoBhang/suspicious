@@ -4,7 +4,7 @@ import { alpha } from "@mui/material/styles";
 
 /** Building blocks shared by the case sheets (Submissions and Investigation drawers). */
 
-export function SectionTitle({ children }: { children: React.ReactNode }) {
+function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <Typography variant="subtitle2" component="h3" color="text.secondary" sx={{ mb: 1 }}>
       {children}

@@ -11,7 +11,7 @@ import { Section, Stat } from "@/shared/components/SheetSection";
 import { getRiskTone, normalizeScore } from "@/shared/lib/scoreUtils";
 import { monoStack } from "@/styles/themes";
 
-export type OverviewTabProps = {
+type OverviewTabProps = {
   row: SubmissionRow;
   reports: SubmissionAnalyzerReport[];
   ci: SubmissionCaseInfos | undefined;

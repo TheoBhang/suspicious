@@ -24,7 +24,7 @@ import { Box, Skeleton, Typography, Stack, IconButton, Button, Tooltip } from "@
 import AttachEmailRoundedIcon from "@mui/icons-material/AttachEmailRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 
-export type MailPreviewProps = {
+type MailPreviewProps = {
   /** Relative URL from the API, e.g. "/api/cases/42/mail-preview.png". `null`/empty = no preview. */
   url?: string | null;
   /** Visual size. Defaults to "thumbnail". */

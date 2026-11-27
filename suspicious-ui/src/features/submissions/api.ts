@@ -161,7 +161,7 @@ export type PaginatedSubmissionsResponse = {
   results: SubmissionRow[];
 };
 
-export type ListSubmissionsParams = {
+type ListSubmissionsParams = {
   mine?: boolean;
   ordering?: SubmissionOrdering;
   page?: number;
@@ -189,7 +189,7 @@ export async function challengeSubmission(
   return res.data;
 }
 
-export type PushToTheHiveResponse = {
+type PushToTheHiveResponse = {
   status: "created" | "updated";
   alert_id: string;
   alert_url: string;
@@ -202,7 +202,7 @@ export async function pushSubmissionToTheHive(
   return res.data;
 }
 
-export type AnalyzeUrlResponse = { status: string; url_id: number };
+type AnalyzeUrlResponse = { status: string; url_id: number };
 
 export async function analyzeUrl(
   submissionId: number,

@@ -6,7 +6,7 @@ import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
 import type { SvgIconProps } from "@mui/material";
 import type { ComponentType } from "react";
 
-export type ConnectorIconType = ComponentType<SvgIconProps>;
+type ConnectorIconType = ComponentType<SvgIconProps>;
 
 export const CONNECTOR_ICONS: Record<string, ConnectorIconType> = {
   thehive: HubOutlined,

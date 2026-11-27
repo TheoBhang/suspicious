@@ -37,7 +37,7 @@ export const classificationOptions = [
 
 export type EditPayload = { caseId: number; score: number; confidence: number; classification: string };
 
-export type InvestigationOverviewProps = {
+type InvestigationOverviewProps = {
   row: InvestigationListResponse["results"][number] | InvestigationDetails;
   caseId: number;
   detailsQuery: UseQueryResult<InvestigationDetails>;

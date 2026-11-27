@@ -1,21 +1,6 @@
 import type { InvestigationDetails } from "@/features/investigation/api";
 
-export {
-  clamp,
-  normalizeScore,
-  normalizeConfidence,
-  getRiskTone,
-  getConfidenceTone,
-  readStatus,
-  readType,
-  summarizeForReading,
-  prettySummary,
-  fmtDate,
-  kindLabel,
-  groupReportsByArtifact,
-  type ReportGroup,
-  type ReportLike,
-} from "@/shared/lib/scoreUtils";
+export { readType, fmtDate, kindLabel, groupReportsByArtifact } from "@/shared/lib/scoreUtils";
 
 // Investigation-specific helpers
 

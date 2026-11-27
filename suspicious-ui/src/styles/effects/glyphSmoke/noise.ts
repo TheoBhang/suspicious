@@ -16,7 +16,7 @@ const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const hash = (x: number, y: number, z: number) => perm[perm[perm[x & 255] + (y & 255)] + (z & 255)] / 255;
 
-export function noise3(x: number, y: number, z: number): number {
+function noise3(x: number, y: number, z: number): number {
   const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
   const xf = fade(x - xi), yf = fade(y - yi), zf = fade(z - zi);
   return lerp(

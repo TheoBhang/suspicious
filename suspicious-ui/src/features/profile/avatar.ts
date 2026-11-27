@@ -14,7 +14,7 @@ export type AvatarConfig = {
   style: string;
   seed: string;
   options?: Record<string, string[]>;
-  /** Presigned MinIO URL, present only when style === "upload". Server-populated; never sent by the client. */
+  /** Presigned object-store URL, present only when style === "upload". Server-populated; never sent by the client. */
   url?: string;
 };
 
@@ -47,7 +47,7 @@ export function renderAvatarDataUri(config: AvatarConfig): string {
   return uri;
 }
 
-export type StyleCategory = {
+type StyleCategory = {
   key: string;
   label: string;
   kind: "enum" | "color";

@@ -3,7 +3,7 @@ import type { ConfigField, Connector, ConnectorDelivery } from "@/features/setti
 const ACRONYMS = new Set(["url", "api", "id", "ip", "ssl", "tls", "smtp", "imap"]);
 
 // Brand casing that title-casing a token cannot guess; group labels and field labels both use it.
-export const BRANDS: Record<string, string> = { openai: "OpenAI", misp: "MISP", thehive: "TheHive", smtp: "SMTP" };
+const BRANDS: Record<string, string> = { openai: "OpenAI", misp: "MISP", thehive: "TheHive", smtp: "SMTP" };
 
 /** The schema carries no label today, so de-snaking the key is the normal path. */
 export function fieldLabel(field: Pick<ConfigField, "key"> & { label?: string }): string {

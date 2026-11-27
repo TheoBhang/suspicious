@@ -49,7 +49,7 @@ export const PRESET_DEFAULT: { result: ResultColors; status: StatusColors } = {
   },
 };
 
-export const PRESET_COLORBLIND: { result: ResultColors; status: StatusColors } = {
+const PRESET_COLORBLIND: { result: ResultColors; status: StatusColors } = {
   result: {
     safe:         { main: "#009E73" },
     suspicious:   { main: "#E69F00" },
@@ -66,7 +66,7 @@ export const PRESET_COLORBLIND: { result: ResultColors; status: StatusColors } =
   },
 };
 
-export const PRESET_MONO: { result: ResultColors; status: StatusColors } = {
+const PRESET_MONO: { result: ResultColors; status: StatusColors } = {
   result: {
     safe:         { main: "#D1D5DB" },
     suspicious:   { main: "#9CA3AF" },

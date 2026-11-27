@@ -21,7 +21,7 @@ export type ListItem = {
 };
 
 /** One add or remove recorded by the backend audit trail (starts when the feature was deployed). */
-export type ListChange = {
+type ListChange = {
   id: number;
   value: string;
   action: "added" | "removed";
@@ -68,7 +68,7 @@ export type EditableListSection =
  * watcher_conflicts — values already present in the paired Watcher list
  *                     (legit for allow, monitored for deny) — no action needed
  */
-export type AddItemsResult = {
+type AddItemsResult = {
   created: (string | number)[];
   duplicates: string[];
   watcher_conflicts: string[];
@@ -94,7 +94,7 @@ type SectionResponseMap = {
   ciso_users: CisoUser[];
 };
 
-export type Paginated<T> = { count: number; next: string | null; previous: string | null; results: T[] };
+type Paginated<T> = { count: number; next: string | null; previous: string | null; results: T[] };
 
 /**
  * Fetch every page of a paginated list endpoint and return the flattened array.
@@ -184,7 +184,7 @@ export type FeederHealth = {
   error: string | null;
   /** Self-reported status from the feeder ("ok" | "degraded"). null when the feeder is unreachable. */
   feeder_status?: "ok" | "degraded" | null;
-  /** Per-subsystem readiness (IMAP, MinIO). Empty object when the feeder is unreachable. */
+  /** Per-subsystem readiness (IMAP, object store). Empty object when the feeder is unreachable. */
   checks?: FeederHealthChecks;
 };
 

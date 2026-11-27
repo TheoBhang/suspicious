@@ -8,7 +8,7 @@ export function monthName(m: number) {
 const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
 
 /** "AU" -> "Australia"; anything Intl does not know stays as the code. */
-export function countryName(code: string): string {
+function countryName(code: string): string {
   try {
     const name = regionNames.of(code);
     return name && name !== code && name !== "Unknown Region" ? name : code;

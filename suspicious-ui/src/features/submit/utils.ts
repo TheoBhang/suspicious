@@ -43,7 +43,7 @@ export function resolveId(res: SubmitSuccessResponse): string | number | null {
 }
 
 
-export const FULL_URL_RE = /^https?:\/\/.+/i;
+const FULL_URL_RE = /^https?:\/\/.+/i;
 
 /**
  * Matches bare hostnames / domains with an optional path.
@@ -52,7 +52,7 @@ export const FULL_URL_RE = /^https?:\/\/.+/i;
  * Matches:   evil.com  sub.evil.co.uk  evil.com/path?q=1
  * No match:  192.168.1.1  abc123deadbeef  malware
  */
-export const BARE_DOMAIN_RE =
+const BARE_DOMAIN_RE =
   /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(\/.*)?$/i;
 
 export function classifyArtifact(raw: string): ArtifactKind {

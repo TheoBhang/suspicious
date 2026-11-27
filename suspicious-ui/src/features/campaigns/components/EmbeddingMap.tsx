@@ -11,7 +11,7 @@ import PointTable from "./PointTable";
 // three.js, react-three-fiber and drei are about 250 kB gzip: fetched only when this page draws the 3D map.
 const EmbeddingMap3D = React.lazy(() => import("./EmbeddingMap3D"));
 
-export type EmbeddingMapProps = {
+type EmbeddingMapProps = {
   points: PcaPoint[];
   explainedVariance: number[];
   /** The period's campaigns, for the map's campaign colours. */

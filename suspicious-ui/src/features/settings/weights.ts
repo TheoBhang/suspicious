@@ -1,4 +1,4 @@
-export type WeightRow = { id: number; weight: number; is_active: boolean };
+type WeightRow = { id: number; weight: number; is_active: boolean };
 
 // Weights live on a 0.1 grid; rounding before summing keeps 0.1 + 0.2 from being 0.30000000000000004.
 export const round1 = (n: number) => Math.round(n * 10) / 10;

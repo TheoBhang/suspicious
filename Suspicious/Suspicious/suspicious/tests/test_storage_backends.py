@@ -13,7 +13,7 @@ from unittest import mock
 
 from django.test import TestCase
 
-from common.storage import FakeObjectStore
+from common.storage import FakeObjectStore, StoreError
 
 from suspicious.storage_backends import DualStorage, MinioMediaStorage
 
@@ -104,3 +104,55 @@ class DualStorageTest(TestCase):
         self.assertTrue(ds.exists("p.txt"))
         self.assertTrue(ds.exists("s.txt"))
         self.assertFalse(ds.exists("missing.txt"))
+
+
+class StoreOutageTest(TestCase):
+    """An unreachable store is an error, not "the file is not there": Django's
+    get_available_name() would otherwise reuse a name that exists."""
+
+    def _down(self):
+        storage = _minio_storage()
+        storage.client.stat = mock.Mock(side_effect=StoreError("unavailable", "down"))
+        storage.client.delete = mock.Mock(side_effect=StoreError("unavailable", "down"))
+        return storage
+
+    def test_exists_raises_when_the_store_is_unavailable(self):
+        with self.assertRaises(StoreError):
+            self._down().exists("a.txt")
+
+    def test_exists_raises_on_access_denied(self):
+        storage = _minio_storage()
+        storage.client.stat = mock.Mock(side_effect=StoreError("access_denied", "no"))
+        with self.assertRaises(StoreError):
+            storage.exists("a.txt")
+
+    def test_exists_is_false_for_a_missing_object(self):
+        self.assertFalse(_minio_storage().exists("missing.txt"))
+
+    def test_delete_of_a_missing_object_is_quiet(self):
+        with self.assertNoLogs("suspicious.storage_backends", "WARNING"):
+            _minio_storage().delete("missing.txt")
+
+    def test_delete_failure_is_logged_not_raised(self):
+        with self.assertLogs("suspicious.storage_backends", "WARNING") as cm:
+            self._down().delete("a.txt")
+        self.assertIn("a.txt", cm.output[0])
+        self.assertIn("unavailable", cm.output[0])
+
+    def test_dual_storage_does_not_fall_back_to_local_during_an_outage(self):
+        primary = self._down()
+        with tempfile.TemporaryDirectory() as tmp:
+            secondary = FileSystemStorage(location=tmp)
+            secondary.save("a.txt", ContentFile(b"old"))
+            ds = DualStorage(primary=primary, secondary=secondary, dual_write=False)
+            with self.assertRaises(StoreError):
+                ds.exists("a.txt")
+
+    def test_dual_storage_delete_survives_an_outage_and_still_clears_local(self):
+        primary = self._down()
+        with tempfile.TemporaryDirectory() as tmp:
+            secondary = FileSystemStorage(location=tmp)
+            secondary.save("a.txt", ContentFile(b"old"))
+            ds = DualStorage(primary=primary, secondary=secondary, dual_write=False)
+            ds.delete("a.txt")
+            self.assertFalse(secondary.exists("a.txt"))

@@ -10,6 +10,7 @@ DEFAULT_FILE_STORAGE setting):
 from __future__ import annotations
 
 import io
+import logging
 import posixpath
 from urllib.parse import urljoin
 
@@ -18,7 +19,9 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage, Storage
 from django.utils.deconstruct import deconstructible
 
-from common.storage import get_store
+from common.storage import StoreError, get_store
+
+logger = logging.getLogger(__name__)
 
 
 def _to_bool(val, default: bool = False) -> bool:
@@ -80,14 +83,16 @@ class MinioMediaStorage(Storage):
         try:
             self.client.stat(self._bucket, name)
             return True
-        except Exception:
-            return False
+        except StoreError as exc:
+            if exc.code == "not_found":
+                return False
+            raise
 
     def delete(self, name):
         try:
             self.client.delete(self._bucket, name)
-        except Exception:
-            pass
+        except StoreError as exc:
+            logger.warning("could not delete %s from the media store: %s", name, exc.code)
 
     def size(self, name):
         return self.client.stat(self._bucket, name).size
@@ -151,8 +156,7 @@ class DualStorage(Storage):
         return self.primary.exists(name) or self.secondary.exists(name)
 
     def delete(self, name):
-        if self.primary.exists(name):
-            self.primary.delete(name)
+        self.primary.delete(name)
         if self.secondary.exists(name):
             self.secondary.delete(name)
 

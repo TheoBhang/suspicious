@@ -1,0 +1,18 @@
+# gitleaks configuration (security.yml runs the CLI; the default rules stay on).
+# Everything allow-listed below is a documented placeholder or a deliberately wrong test credential,
+# reviewed on 2026-11-27 against the full history. Add to this list only after looking at the value.
+title = "Suspicious"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "documented placeholders and deliberately wrong test credentials"
+regexes = [
+  # settings.json example and sample: the Django secret key placeholder
+  '''replace-with-vault-or-a-real-64-char-random-key-0123456789abcdef''',
+  # settings example: the fictional dev stack's object-store password
+  '''meridian_dev_minio_pw''',
+  # base64 of "wrong:key": the elastic_siem live tests send a bad key on purpose
+  '''d3Jvbmc6a2V5''',
+]

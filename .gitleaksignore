@@ -1,0 +1,7 @@
+# Known historical findings, one gitleaks fingerprint per line (commit:file:rule:line).
+#
+# The docs example settings file carried a random-looking 86-character secret_key from 2026-06-10 until it
+# was replaced by a placeholder. Confirmed by the owner on 2026-11-27: an old development key, never used by
+# a deployment, so nothing to rotate. It is gone from the current tree and only lives in older commits;
+# the entry exists so the scan can gate new commits without rewriting shared history.
+2cae9050cb710cb9fa9a397c41cd51419d3c966b:docs/getting-started/examples/Suspicious-settings.example.json:generic-api-key:5

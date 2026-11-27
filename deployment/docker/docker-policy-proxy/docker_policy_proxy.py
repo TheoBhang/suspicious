@@ -45,6 +45,43 @@ ENDPOINTS = [  # (method, path regex): everything an analyzer run uses, nothing 
 EMPTY = (None, "", [], {}, False, 0)
 
 
+VERSION = re.compile(r"^/v\d+(\.\d+)?(?=/|$)")
+TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+TARGET = re.compile(r"/[\x21-\x7e]*")
+CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")   # tab is the only control character a header may hold
+
+
+def strip_version(path):
+    return VERSION.sub("", path)
+
+
+def parse_head(head):
+    """(request line, method, target, headers, names) of a request head, or ValueError. Strict on purpose:
+    Go's HTTP parser and HAProxy accept looser framing than this (a bare LF, folded or repeated headers),
+    and any difference between what is judged here and what the daemon reads would be a bypass."""
+    lines = head[:-4].decode("latin-1").split("\r\n")
+    if any(CONTROL.search(line) for line in lines):
+        raise ValueError("control character in the request head")
+    parts = lines[0].split(" ")
+    if len(parts) != 3:
+        raise ValueError("bad request line")
+    method, target, version = parts
+    if not (method.isalpha() and method.isupper() and TARGET.fullmatch(target)
+            and version in ("HTTP/1.0", "HTTP/1.1")):
+        raise ValueError("bad request line")
+    headers, names = [], {}
+    for line in lines[1:]:
+        name, sep, value = line.partition(":")
+        if not sep or not TOKEN.fullmatch(name):
+            raise ValueError(f"bad header line {line[:40]!r}")
+        low = name.lower()
+        if low in names:
+            raise ValueError(f"header {name!r} is repeated")
+        names[low] = value.strip()
+        headers.append((name, value))
+    return lines[0], method, target, headers, names
+
+
 def parse_json(raw):
     """json.loads that refuses a key repeated in any case (Docker's decoder is case-insensitive)."""
     def pairs(items):
@@ -112,7 +149,7 @@ def _bind_problem(bind, job_dir):
     # that does not exist) is refused. Non-strict realpath would take it for a plain directory.
     try:
         real, real_root = os.path.realpath(source, strict=True), os.path.realpath(root, strict=True)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:   # ValueError: an embedded NUL or an unencodable character
         return f"bind source {source!r} cannot be resolved ({exc.__class__.__name__}): refused"
     if not real.startswith(real_root + "/"):
         return f"bind source {source!r} resolves outside the job directory {root}"
@@ -127,6 +164,12 @@ SAFE_NETWORKS = ("", "default", "bridge", "none")
 ALLOWED_HOSTCONFIG = {"binds", "networkmode", "autoremove", "capdrop", "memory", "memoryswap",
                       "memoryreservation", "nanocpus", "cpushares", "cpuperiod", "cpuquota",
                       "cpusetcpus", "pidslimit", "readonlyrootfs", "init", "ulimits"}
+DANGEROUS_LOWER = frozenset(f.lower() for f in DANGEROUS_FIELDS)
+# Top-level create fields with a value. docker-java sends all of them, null unless set (the dev run showed
+# a non-null Image, Cmd, Env, HostConfig and Labels only); anything else with a value is refused.
+ALLOWED_TOPLEVEL = {"image", "cmd", "entrypoint", "env", "user", "workingdir", "hostconfig", "labels",
+                    "networkingconfig", "attachstdin", "attachstdout", "attachstderr", "tty", "openstdin",
+                    "stdinonce", "hostname", "domainname", "argsescaped"}
 ALLOWED_SECURITYOPT = {"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"}
 JUDGED_ELSEWHERE = {"privileged", "runtime", "securityopt"}
 UNMASKING = ("maskedpaths", "readonlypaths")   # an empty list here removes the default masking
@@ -141,6 +184,9 @@ def evaluate_create(body, images, job_dir):
     image = body.get("image")
     if not isinstance(image, str) or normalise_image(image) not in images:
         problems.append(f"image {image!r} is not in the analyzer catalogs")
+    for key, value in body.items():
+        if value not in EMPTY and key not in ALLOWED_TOPLEVEL:
+            problems.append(f"{key} is not an allowed create field")
     host = body.get("hostconfig") or {}
     if not isinstance(host, dict):
         return problems + ["HostConfig is not an object"]
@@ -154,7 +200,11 @@ def evaluate_create(body, images, job_dir):
         problems.append(f"NetworkMode {network!r} is refused (only default, bridge or none)")
     if host.get("runtime") not in (None, "", "runc"):
         problems.append(f"Runtime {host['runtime']!r} is refused")
-    for opt in host.get("securityopt") or []:
+    options = host.get("securityopt") or []
+    if not isinstance(options, list):
+        problems.append("SecurityOpt is not a list")
+        options = []
+    for opt in options:
         if str(opt).lower() not in ALLOWED_SECURITYOPT:
             problems.append(f"SecurityOpt {opt!r} is refused (only no-new-privileges is allowed)")
     for field in UNMASKING:
@@ -162,13 +212,16 @@ def evaluate_create(body, images, job_dir):
             problems.append(f"HostConfig.{field} is set")
     for field, value in host.items():
         if (value not in EMPTY and field not in ALLOWED_HOSTCONFIG and field not in JUDGED_ELSEWHERE
-                and field not in {f.lower() for f in DANGEROUS_FIELDS}):
+                and field not in DANGEROUS_LOWER):
             problems.append(f"HostConfig.{field} is not an allowed field")
     networking = body.get("networkingconfig")
     if isinstance(networking, dict) and networking.get("endpointsconfig") not in EMPTY:
         problems.append("NetworkingConfig.EndpointsConfig attaches networks: refused")
     binds = host.get("binds") or []
-    for bind in binds if isinstance(binds, list) else [binds]:
+    if not isinstance(binds, list):
+        problems.append("Binds is not a list")
+        binds = []
+    for bind in binds:
         problem = _bind_problem(bind, job_dir)
         if problem:
             problems.append(problem)
@@ -177,16 +230,17 @@ def evaluate_create(body, images, job_dir):
 
 def evaluate_request(method, path, query, body, images, job_dir, raw_body=b"", content_type=""):
     """Reasons a request is refused (empty list: allowed). `path` may carry /vX.YY."""
-    path = re.sub(r"^/v\d+(\.\d+)?(?=/)", "", path)
+    path = strip_version(path)
     if ".." in path or "//" in path:
         return [f"path {path!r} is not normal"]
     if not any(method == m and re.fullmatch(p, path) for m, p in ENDPOINTS):
         return [f"{method} {path} is not an endpoint analyzer runs use"]
-    if path != "/containers/create" and raw_body:
+    is_create = method == "POST" and path == "/containers/create"
+    if not is_create and raw_body:
         # The daemon merges a form-encoded POST body into the query, ahead of it: a body could change
         # what the checks below saw (for example fromImage).
         return [f"{method} {path} must not carry a body"]
-    if path == "/containers/create":
+    if is_create:
         if "x-www-form-urlencoded" in content_type.lower():
             return ["create must be JSON, not a form"]
         return evaluate_create(body, images, job_dir)
@@ -214,6 +268,7 @@ def summarise_create(body):
         return {"body": "not an object"}
     keep = {k: body[k] for k in ("Image", "User", "WorkingDir", "Entrypoint") if k in body}
     keep["TopLevelKeys"] = sorted(body)
+    keep["NonEmptyTopLevel"] = sorted(k for k, v in body.items() if v not in EMPTY)
     keep["EnvNames"] = sorted(e.split("=", 1)[0] for e in body.get("Env") or [] if isinstance(e, str))
     keep["HostConfig"] = body.get("HostConfig")
     return keep
@@ -240,6 +295,7 @@ class Config:
     catalogs: tuple = ()
     extra: tuple = ()
     stamp: object = dataclasses.field(default=None, repr=False)
+    ours: set = dataclasses.field(default_factory=set, repr=False)   # labelled containers (labels never change)
 
     def current_images(self):
         """The image set, re-read when a catalog file changed in place (mtime or inode). A refresh that
@@ -291,6 +347,16 @@ async def refuse(writer, status, reason):
 CONTAINER_PATH = re.compile(rf"/containers/({CID})(?:/[a-z]+)?")
 
 
+def container_id(method, path):
+    """The container a request is about, or None (not a container call, or POST /containers/create:
+    `create` is also a legal container name, so only that exact call is exempt)."""
+    stripped = strip_version(path)
+    if method == "POST" and stripped == "/containers/create":
+        return None
+    match = CONTAINER_PATH.fullmatch(stripped)
+    return match.group(1) if match else None
+
+
 async def _read_all(reader, limit):
     buf = b""
     while len(buf) < limit:
@@ -301,9 +367,9 @@ async def _read_all(reader, limit):
     return buf
 
 
-async def owned(cfg, cid):
-    """True when the container carries our label, or does not exist (nothing to protect). The label is
-    read from the daemon through the upstream proxy, so it survives a restart of this service."""
+async def ownership(cfg, cid):
+    """"ours" (it carries our label), "absent" (no such container: nothing to protect) or "foreign". The
+    label is read from the daemon through the upstream proxy, so it survives a restart of this service."""
     writer = None
     try:
         reader, writer = await asyncio.wait_for(
@@ -316,13 +382,13 @@ async def owned(cfg, cid):
         head, _, body = raw.partition(b"\r\n\r\n")
         status = int(head.split(b" ", 2)[1])
         if status == 404:
-            return True
+            return "absent"
         if status != 200:
-            return False
+            return "foreign"
         labels = ((json.loads(body).get("Config") or {}).get("Labels")) or {}
-        return labels.get(LABEL) == "1"
-    except (OSError, ValueError, IndexError, asyncio.TimeoutError):
-        return False   # cannot tell: refuse
+        return "ours" if labels.get(LABEL) == "1" else "foreign"
+    except (OSError, ValueError, IndexError, AttributeError, asyncio.TimeoutError):
+        return "foreign"   # cannot tell: refuse
     finally:
         if writer is not None:
             writer.close()
@@ -360,17 +426,20 @@ async def handle(reader, writer, cfg):
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), READ_TIMEOUT)
         except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError):
             return await refuse(writer, 400, "request head not received")
-        lines = head[:-4].decode("latin-1").split("\r\n")
         try:
-            method, target, version = lines[0].split(" ", 2)
-        except ValueError:
-            return await refuse(writer, 400, "bad request line")
-        headers = [tuple(h.split(":", 1)) for h in lines[1:] if ":" in h]
-        names = {k.strip().lower(): v.strip() for k, v in headers}
+            request_line, method, target, headers, names = parse_head(head)
+        except ValueError as exc:
+            return await refuse(writer, 400, str(exc))
         url = urllib.parse.urlsplit(target)
         if "upgrade" in names.get("connection", "").lower() or "upgrade" in names:
             log("request", method=method, path=url.path, verdict="deny", problems=["upgrade is refused"])
             return await refuse(writer, 403, "connection upgrades are refused")
+        expect = names.get("expect", "").lower()
+        if expect and expect != "100-continue":
+            return await refuse(writer, 400, "unsupported Expect")
+        if expect and (names.get("content-length") or "chunked" in names.get("transfer-encoding", "").lower()):
+            writer.write(b"HTTP/1.1 100 Continue\r\n\r\n")   # the body follows once the client hears this
+            await writer.drain()
         body = b""
         try:
             if "chunked" in names.get("transfer-encoding", "").lower():
@@ -383,16 +452,25 @@ async def handle(reader, writer, cfg):
             return await refuse(writer, 400, "unreadable request body")
 
         parsed = None
-        if method == "POST" and re.sub(r"^/v\d+(\.\d+)?", "", url.path) == "/containers/create":
+        if method == "POST" and strip_version(url.path) == "/containers/create":
             try:
                 parsed = parse_json(body or b"null")
             except ValueError:
                 parsed = None
-        problems = evaluate_request(method, url.path, url.query, parsed, cfg.current_images(), cfg.job_dir,
-                                    raw_body=body, content_type=names.get("content-type", ""))
-        match = CONTAINER_PATH.fullmatch(re.sub(r"^/v\d+(\.\d+)?", "", url.path))
-        if not problems and match and match.group(1) != "create" and not await owned(cfg, match.group(1)):
-            problems = [f"container {match.group(1)!r} was not created through this policy"]
+        try:
+            problems = evaluate_request(method, url.path, url.query, parsed, cfg.current_images(), cfg.job_dir,
+                                        raw_body=body, content_type=names.get("content-type", ""))
+        except Exception as exc:   # a body the checks cannot digest is refused, never a dropped connection
+            problems = [f"policy error ({type(exc).__name__}): refused"]
+        cid = container_id(method, url.path)
+        if not problems and cid and cid not in cfg.ours:
+            answer = await ownership(cfg, cid)
+            if answer == "ours":
+                if len(cfg.ours) > 4096:
+                    cfg.ours.clear()
+                cfg.ours.add(cid)
+            elif answer == "foreign":
+                problems = [f"container {cid!r} was not created through this policy"]
         verdict = "allow" if not problems else ("deny" if cfg.mode == "enforce" else "would_deny")
         fields = {"method": method, "path": url.path, "verdict": verdict, "problems": problems}
         if url.path.endswith("/containers/create"):
@@ -401,12 +479,12 @@ async def handle(reader, writer, cfg):
             log("request", **fields)
         if verdict == "deny":
             return await refuse(writer, 403, "; ".join(problems))
-        if re.sub(r"^/v\d+(\.\d+)?", "", url.path) == "/containers/create" and isinstance(parsed, dict):
+        if method == "POST" and strip_version(url.path) == "/containers/create" and isinstance(parsed, dict):
             body = json.dumps(label_create(parsed)).encode()   # forwarded in log mode too, so containers
                                                                 # made before enforce stay manageable
 
-        skip = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "content-length"}
-        out = [lines[0]] + [f"{k}:{v}" for k, v in headers if k.strip().lower() not in skip]
+        skip = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "content-length", "expect"}
+        out = [request_line] + [f"{k}:{v}" for k, v in headers if k.lower() not in skip]
         out.append("Connection: close")
         if body:
             out.append(f"Content-Length: {len(body)}")

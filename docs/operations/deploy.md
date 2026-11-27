@@ -170,11 +170,24 @@ Beyond the create body, the policy also:
 - adds the label `org.thalesgroup.suspicious.cortex-analyzer=1` to every container it lets Cortex create,
   and lets start, stop, kill, wait, logs, inspect and delete reach only containers with that label, so a
   compromised Cortex cannot read the environment of, or stop, the stack's own containers. Containers made
-  before the label existed are refused after `enforce`: switch while no analyzer is running;
+  before the label existed are refused after `enforce`: switch while no analyzer is running. The verdict for
+  a labelled container is remembered (labels never change); a container id that does not exist is let
+  through, so the daemon answers 404. `create` is also a legal container name: only `POST
+  /containers/create` is exempt from the check;
 - allows only the `HostConfig` fields an analyzer run sends (binds, network mode, resource limits,
   `CapDrop`, `AutoRemove`) and refuses `NetworkingConfig.EndpointsConfig`, `MaskedPaths` and
   `ReadonlyPaths`, non-ASCII JSON keys, and any security option except `no-new-privileges`;
 - refuses a body on every request except container create, and a create sent as a form;
+- reads the request head strictly, because Go's parser and HAProxy accept looser framing: a control
+  character (including a bare line feed), a folded or repeated header, a malformed request line or an HTTP
+  version other than 1.0 and 1.1 is answered 400 in both modes (these cannot be forwarded safely). `Expect:
+  100-continue` is answered by the policy and not forwarded;
+- allows only the top-level create fields Cortex sends with a value (`Image`, `Cmd`, `Entrypoint`, `Env`,
+  `User`, `WorkingDir`, `Labels`, the attach and tty flags, `HostConfig`): `Volumes`, `Healthcheck`,
+  `ExposedPorts` and the like are refused. The dev run showed Cortex sends only `Env`, `HostConfig` and
+  `Image`; the create log line lists the non-empty top-level fields (`NonEmptyTopLevel`);
+- turns any error while judging a request into a refusal (logged as `would_deny` in log mode), never a
+  dropped connection;
 - cuts off a client that stalls while sending a request (15 s), and closes the Docker connection when
   Cortex drops a long wait or logs call;
 - re-reads the catalogs when a file changes in place (as `make init` does when it downloads over them). A

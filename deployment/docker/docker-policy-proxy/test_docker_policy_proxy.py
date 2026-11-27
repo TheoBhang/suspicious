@@ -181,6 +181,26 @@ class CreatePolicy(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertTrue(check(create(HostConfig={"SecurityOpt": bad})))
 
+    def test_odd_values_are_refused_not_raised(self):
+        self.assertTrue(check(create(HostConfig={"Binds": [f"{JOBS}/job1\u0000x:/job"]})))
+        self.assertTrue(check(create(HostConfig={"Binds": ["/tmp/\ud800:/job"]})))
+        self.assertTrue(check(create(HostConfig={"SecurityOpt": 5})))
+        self.assertTrue(check(create(HostConfig={"Binds": 5})))
+
+    def test_top_level_fields_outside_the_allow_list_are_refused(self):
+        for field, value in [("Volumes", {"/x": {}}), ("Healthcheck", {"Test": ["CMD", "x"]}),
+                             ("ExposedPorts", {"80/tcp": {}}), ("NetworkDisabled", True),
+                             ("MacAddress", "aa:bb"), ("StopSignal", "SIGKILL")]:
+            with self.subTest(field=field):
+                body = create()
+                body[field] = value
+                self.assertTrue(check(body))
+
+    def test_null_and_normal_top_level_fields_pass(self):
+        body = create(Labels={"a": "b"}, Env=["A=1"], User=None, Volumes=None, Healthcheck=None,
+                      AttachStdout=True, Tty=False)
+        self.assertEqual(check(body), [])
+
     def test_harmless_hostconfig_fields_pass(self):
         host = {"AutoRemove": False, "Memory": 1 << 30, "NetworkMode": "default", "CapDrop": ["ALL"]}
         self.assertEqual(check(create(HostConfig=host)), [])
@@ -250,6 +270,14 @@ class RequestPolicy(unittest.TestCase):
                                              raw_body=b"{}", content_type="application/x-www-form-urlencoded"))
         self.assertEqual(dpp.evaluate_request("POST", "/containers/create", "", create(), IMAGES, JOBS,
                                               raw_body=b"{}", content_type="application/json"), [])
+
+    def test_create_as_a_container_id_is_not_the_create_endpoint(self):
+        self.assertEqual(dpp.container_id("POST", "/v1.43/containers/create"), None)
+        for method, path in [("GET", "/containers/create/json"), ("POST", "/containers/create/kill"),
+                             ("DELETE", "/containers/create")]:
+            with self.subTest(path=path):
+                self.assertEqual(dpp.container_id(method, path), "create")
+        self.assertEqual(dpp.container_id("GET", "/_ping"), None)
 
     def test_path_tricks_are_not_allowed(self):
         self.assertTrue(self.ev("POST", "/containers/../containers/create/../x"))
@@ -454,6 +482,89 @@ class Server(unittest.IsolatedAsyncioTestCase):
     async def test_container_endpoints_are_only_logged_in_log_mode(self):
         out = await self.request("log", b"DELETE /containers/other HTTP/1.1\r\nHost: d\r\n\r\n")
         self.assertTrue(out.startswith(b"HTTP/1.1 201"), out)
+
+    async def test_ownership_applies_to_every_verb_on_an_id_called_create(self):
+        for method, tail in [("GET", "/json"), ("POST", "/kill"), ("DELETE", "")]:
+            with self.subTest(method=method):
+                self.seen.clear()
+                out = await self.request("enforce", f"{method} /containers/create{tail} HTTP/1.1\r\nHost: d\r\n\r\n".encode())
+                self.assertTrue(out.startswith(b"HTTP/1.1 403"), out)
+                self.assertEqual(self.seen[0][0].split(b"\r\n")[0], b"GET /containers/create/json HTTP/1.0")
+
+    async def test_a_verdict_for_a_labelled_container_is_asked_once(self):
+        cfg = dpp.Config(mode="enforce", upstream_host="127.0.0.1", upstream_port=self.up_port,
+                         job_dir=JOBS, images=IMAGES)
+        for _ in range(3):
+            srv = await asyncio.start_server(lambda r, w: dpp.handle(r, w, cfg), "127.0.0.1", 0)
+            reader, writer = await asyncio.open_connection("127.0.0.1", srv.sockets[0].getsockname()[1])
+            writer.write(b"GET /containers/mine/logs HTTP/1.1\r\nHost: d\r\n\r\n")
+            await writer.drain()
+            await asyncio.wait_for(reader.read(), 5)
+            writer.close()
+            srv.close()
+            await srv.wait_closed()
+        inspects = [h for h, _ in self.seen if h.startswith(b"GET /containers/mine/json")]
+        self.assertEqual(len(inspects), 1)
+
+    async def test_a_bare_line_feed_in_the_head_is_refused(self):
+        for raw in (b"GET /_ping HTTP/1.1\r\nX: a\n\nPOST /containers/create HTTP/1.1\n\n\r\n\r\n",
+                    b"GET /_ping HTTP/1.1\r\nX: a\x00b\r\n\r\n",
+                    b"GET /_ping\n HTTP/1.1\r\nHost: d\r\n\r\n"):
+            with self.subTest(raw=raw):
+                out = await self.request("log", raw)
+                self.assertTrue(out.startswith(b"HTTP/1.1 400"), out)
+        self.assertEqual(self.seen, [])
+
+    async def test_a_malformed_request_line_or_header_is_refused(self):
+        for raw in (b"GET /_ping HTTP/2.0\r\nHost: d\r\n\r\n", b"get /_ping HTTP/1.1\r\nHost: d\r\n\r\n",
+                    b"GET _ping HTTP/1.1\r\nHost: d\r\n\r\n", b"GET /a b HTTP/1.1\r\nHost: d\r\n\r\n",
+                    b"GET /_ping HTTP/1.1\r\nHost : d\r\n\r\n", b"GET /_ping HTTP/1.1\r\nHost: d\r\n folded\r\n\r\n",
+                    b"GET /_ping HTTP/1.1\r\nnocolon\r\n\r\n"):
+            with self.subTest(raw=raw):
+                out = await self.request("log", raw)
+                self.assertTrue(out.startswith(b"HTTP/1.1 400"), out)
+        self.assertEqual(self.seen, [])
+
+    async def test_a_repeated_header_is_refused(self):
+        raw = (b"POST /containers/create HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\n"
+               b"Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+        out = await self.request("log", raw)
+        self.assertTrue(out.startswith(b"HTTP/1.1 400"), out)
+        out = await self.request("log", b"GET /_ping HTTP/1.1\r\nX-A: 1\r\nx-a: 2\r\n\r\n")
+        self.assertTrue(out.startswith(b"HTTP/1.1 400"), out)
+        self.assertEqual(self.seen, [])
+
+    async def test_an_evaluation_error_becomes_a_refusal_not_a_dropped_connection(self):
+        with patch.object(dpp, "evaluate_request", side_effect=RuntimeError("boom")):
+            out = await self.request("enforce", b"GET /_ping HTTP/1.1\r\nHost: d\r\n\r\n")
+            self.assertTrue(out.startswith(b"HTTP/1.1 403"), out)
+            self.assertEqual(self.seen, [])
+            import contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                out = await self.request("log", b"GET /_ping HTTP/1.1\r\nHost: d\r\n\r\n")
+            self.assertTrue(out.startswith(b"HTTP/1.1 201"), out)          # forwarded in log mode
+            self.assertIn("would_deny", buf.getvalue())
+
+    async def test_expect_100_continue_is_answered_and_not_forwarded(self):
+        cfg = dpp.Config(mode="enforce", upstream_host="127.0.0.1", upstream_port=self.up_port,
+                         job_dir=JOBS, images=IMAGES)
+        srv = await asyncio.start_server(lambda r, w: dpp.handle(r, w, cfg), "127.0.0.1", 0)
+        reader, writer = await asyncio.open_connection("127.0.0.1", srv.sockets[0].getsockname()[1])
+        data = json.dumps(create()).encode()
+        writer.write(b"POST /containers/create HTTP/1.1\r\nHost: d\r\nExpect: 100-continue\r\n"
+                     b"Content-Length: %d\r\n\r\n" % len(data))
+        await writer.drain()
+        interim = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 3)
+        self.assertEqual(interim, b"HTTP/1.1 100 Continue\r\n\r\n")
+        writer.write(data)
+        await writer.drain()
+        final = await asyncio.wait_for(reader.read(), 5)
+        self.assertTrue(final.startswith(b"HTTP/1.1 201"), final)
+        self.assertNotIn(b"expect", self.seen[0][0].lower())
+        writer.close()
+        srv.close()
+        await srv.wait_closed()
 
     async def test_a_client_that_leaves_frees_the_upstream_connection(self):
         cfg = dpp.Config(mode="enforce", upstream_host="127.0.0.1", upstream_port=self.up_port,

@@ -97,7 +97,8 @@ write_env() {
     "FEEDER_PATH=$R/email-feeder" "DOCKER_PATH=$R/docker" "YARA_PATH=$R/yara" "CORTEX_PATH=$R/cortex" "CA_PATH=$D/certificates" \
     "CUSTOM_ANALYZERS_PATH=$R/Analyzers" "TRAEFIK_PATH=$R/traefik" "DOCKER_SOCK_GID=$(stat -c %g /var/run/docker.sock)" \
     "SUSPICIOUS_VERSION=$2" "SUSPICIOUS_UI_VERSION=$IMG_UI" "SUSPICIOUS_FEEDER_VERSION=$IMG_FEEDER" "BACKEND_URL=http://suspicious:9020" \
-    "FEEDER_API_TOKEN=authcheck-feeder-token" "HTTP_PROXY=" "HTTPS_PROXY="; do setenv "${kv%%=*}" "${kv#*=}"; done
+    "FEEDER_API_TOKEN=authcheck-feeder-token" "HTTP_PROXY=" "HTTPS_PROXY=" \
+    "DOCKER_POLICY_EXTRA_IMAGES=ci/dummy:1"; do setenv "${kv%%=*}" "${kv#*=}"; done
   mkdir -p "$R/traefik/logs"
 }
 

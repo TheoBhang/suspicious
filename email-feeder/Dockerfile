@@ -49,6 +49,10 @@ WORKDIR /app
 # Install uv (pinned)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
+# Bring the base image's own pip to a patched release. pip itself, not uv: uv leaves the old
+# pip-*.dist-info behind, which audits still flag.
+RUN python -m pip install --no-cache-dir --upgrade pip
+
 COPY requirements.txt .
 
 # Install dependencies directly into system python

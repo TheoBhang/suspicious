@@ -11,9 +11,12 @@ from django.test import TestCase
 from django.utils import timezone
 
 from ai_model.models import LabelRecord
-from case_handler.models import Case, CaseHasNonFileIocs, Result
+from case_handler.models import Case, CaseHasFileOrMail, CaseHasNonFileIocs, Result
 from cortex_job.models import Analyzer, AnalyzerReport
+from file_process.models import File
+from hash_process.models import Hash
 from ip_process.models import IP
+from mail_feeder.models import Mail, MailArchive
 from score_process import replay
 
 
@@ -77,7 +80,25 @@ class ReplayCase(TestCase):
         self.assertIsNone(out.replay)
 
     def test_the_road_is_named(self):
-        self.assertEqual(replay.replay_case(make_ioc_case(3).pk).road, "ioc")
+        row = replay.replay_case(make_ioc_case(3).pk)
+        self.assertEqual(row.road, "ioc")
+        self.assertIsNone(row.ai)   # the AI vote only exists on the mail road
+
+    def test_a_mail_case_without_an_ai_assessment_is_flagged(self):
+        case = make_ioc_case(7)
+        mail = Mail.objects.create(subject="s", reportedBy="r", date=timezone.now(), to="t", mail_id="rp-m7")
+        archive = File.objects.create(linked_hash=Hash.objects.create(value="rp-h7"), tmp_path="rp7.tar.gz")
+        MailArchive.objects.create(mail=mail, archive=archive)
+        case.fileOrMail = CaseHasFileOrMail.objects.create(case=case, mail=mail)
+        case.save()
+        row = replay.replay_case(case.pk)
+        self.assertEqual(row.road, "ioc")   # nonFileIocs still wins; the flag is about the mail road
+        mail_only = Case.objects.create(description="", reporter=case.reporter, results=Result.SAFE)
+        mail_only.fileOrMail = CaseHasFileOrMail.objects.create(case=mail_only, mail=mail)
+        mail_only.save()
+        row = replay.replay_case(mail_only.pk)
+        self.assertEqual(row.road, "mail")
+        self.assertFalse(row.ai)
 
 
 class Summary(TestCase):
@@ -101,6 +122,16 @@ class Summary(TestCase):
         self.assertEqual(s["accuracy"]["missed_threat"]["n"], 2)
         self.assertEqual(s["accuracy"]["false_alarm"]["k"], 1)
         self.assertEqual(s["accuracy"]["false_alarm"]["n"], 1)
+
+    def test_mail_cases_without_an_ai_vote_are_left_out_of_both_views_and_counted(self):
+        no_ai = self.row("Safe", "Inconclusive", analyst="Safe")
+        no_ai.ai = False
+        also = self.row("Safe", "Inconclusive")
+        also.ai = False
+        s = replay.summarise([no_ai, also, self.row("Safe", "Safe", analyst="Safe")])
+        self.assertEqual(s["no_ai"], 2)
+        self.assertEqual(s["accuracy"]["n"], 1)
+        self.assertEqual(s["drift"]["n"], 0)
 
     def test_errors_are_counted_apart_from_both_views(self):
         s = replay.summarise([self.row("Safe", None, error="x"), self.row("Safe", "Safe")])

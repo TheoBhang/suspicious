@@ -31,6 +31,7 @@ class Row:
     analyst: str | None
     score: float | None
     error: str | None = None
+    ai: bool | None = None  # mail road: the case has an AiAssessment; None on other roads
 
 
 class _Rollback(Exception):
@@ -82,6 +83,9 @@ def replay_case(case_id, analyst=None):
 
     case = Case.objects.select_related("fileOrMail", "nonFileIocs").get(pk=case_id)
     row = Row(case_id, road_of(case), case.results, None, analyst, None)
+    if row.road == "mail":
+        from ai_model.models import AiAssessment
+        row.ai = AiAssessment.objects.filter(case_id=case_id).exists()
     capture = _ErrorCapture()
     logger = logging.getLogger(SCORING_LOGGER)
     logger.addHandler(capture)
@@ -107,11 +111,15 @@ def _rate(rows, truth, wrong):
 
 
 def summarise(rows):
-    ok = [r for r in rows if not r.error]
+    # A mail case with no AiAssessment finalised before the ai_model connector (or without it); the
+    # engine now treats a missing AI vote as Inconclusive on purpose, so replaying it proves nothing.
+    no_ai = [r for r in rows if not r.error and r.ai is False]
+    ok = [r for r in rows if not r.error and r.ai is not False]
     plain = [r for r in ok if not r.analyst]
     edited = [r for r in ok if r.analyst]
     return {
-        "errors": len(rows) - len(ok),
+        "errors": sum(1 for r in rows if r.error),
+        "no_ai": len(no_ai),
         "drift": {
             "n": len(plain),
             "changed": sum(1 for r in plain if r.stored != r.replay),

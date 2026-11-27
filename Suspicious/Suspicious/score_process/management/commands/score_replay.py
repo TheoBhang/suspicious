@@ -53,6 +53,9 @@ class Command(BaseCommand):
         s = replay.summarise(rows)
         w = self.stdout.write
         w(f"\n=== {title}: {len(rows)} cases, {s['errors']} scoring errors ===")
+        if s["no_ai"]:
+            w(f"{s['no_ai']} mail cases have no AI assessment (finalised before the ai_model connector): "
+              "left out of both views, because a missing AI vote is Inconclusive by design now")
         d = s["drift"]
         w(f"Drift (stored vs replay, analyst-edited excluded): {d['changed']} of {d['n']} changed")
         for (old, new), n in sorted(d["matrix"].items(), key=lambda x: str(x)):
@@ -69,6 +72,8 @@ class Command(BaseCommand):
             out = csv.writer(fh)
             out.writerow(["case_id", "road", "kind", "stored", "analyst", "replay", "score", "error"])
             for r in rows:
+                if r.ai is False and not r.error:
+                    continue
                 kind = "accuracy" if r.analyst else "drift"
                 expected = r.analyst or r.stored
                 if r.error or r.replay != expected:

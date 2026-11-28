@@ -45,7 +45,7 @@ def _description(case, member: MemberMaterial, challenger: dict, rows, ui_base: 
     ]
     if case.verdict_rationale:
         lines += ["", "## Why this verdict"] + [f"- {r}" for r in case.verdict_rationale]
-    lines += indicator_lines(member.iocs) + attachment_lines(rows, count=False)
+    lines += indicator_lines(member.iocs) + attachment_lines(rows, count=False, unreadable=member.material.unreadable)
     lines += ["", "The mail and its attachments are file observables; the rendered mail is in the Attachments tab. "
               "Every observable is in the Observables tab."]
     example = defang_urls_in((member.material.text or member.material.html or "")[:1500]).replace("```", "'''")

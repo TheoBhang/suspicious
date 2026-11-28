@@ -38,6 +38,7 @@ class MailMaterial:
     html: str = ""
     eml: bytes = b""
     attachments: list[Attachment] = field(default_factory=list)
+    unreadable: int = 0  # stored objects that could not be read; the alert says so
 
 
 def _put(material: MailMaterial, rel: str, data: bytes) -> None:
@@ -98,9 +99,11 @@ def fetch_mail_material(client, mail_id: str, bucket_name: str = "", mail_archiv
                 raise
             # Never the object name or message: the name is the mail's file name.
             logger.warning("campaign material: an object of mail %s vanished: %s", mail_id, exc.code)
+            material.unreadable += 1
             continue
         except Exception as exc:  # noqa: BLE001 — one unreadable object must not lose the rest
             logger.warning("campaign material: cannot read an object of mail %s: %s", mail_id, type(exc).__name__)
+            material.unreadable += 1
             continue
         _put(material, obj.name[len(prefix):], data)
     return material

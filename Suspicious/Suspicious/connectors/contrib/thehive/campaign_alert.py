@@ -183,8 +183,10 @@ def indicator_lines(iocs: Iocs) -> list[str]:
     return ["", "## Indicators", *[f"- **{label}:** {_list(values)}" for label, values in rows if values]]
 
 
-def attachment_lines(rows, *, count: bool = True) -> list[str]:
+def attachment_lines(rows, *, count: bool = True, unreadable: int = 0) -> list[str]:
     lines = ["", "## Attachments"]
+    if unreadable:
+        lines += ["", f"**{unreadable} file(s) could not be read from storage; the evidence below is incomplete.**"]
     if not rows:
         return lines + ["No attachments."]
     lines += ["| File | Size | SHA-256 | Status |" + (" Mails |" if count else ""),
@@ -215,7 +217,7 @@ def build_description(campaign, members: list[MemberMaterial], iocs: Iocs, rows,
         f"| Highest AI malscore | {max(i.malscore for i in infos):.1f} |",
         f"| Email authentication | {', '.join(iocs.auth_failures) or 'no failure recorded'} |",
     ]
-    lines += indicator_lines(iocs) + attachment_lines(rows)
+    lines += indicator_lines(iocs) + attachment_lines(rows, unreadable=sum(m.material.unreadable for m in members))
     lines += ["", "## Subjects"] + [f"- {s} (x{n})" for s, n in subjects]
     lines += ["", "## Suspicious cases"]
     lines += [f"- [#{i.case_id}]({ui_base}/investigation?open={i.case_id}) reported by {i.reporter} "

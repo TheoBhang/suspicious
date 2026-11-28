@@ -102,6 +102,11 @@ class FetchMaterialTest(SimpleTestCase):
                 self.assertEqual(m.headers, "Subject: Hi")
                 self.assertNotIn("secret-plan", "\n".join(logs.output))
                 self.assertIn("RuntimeError" if error else "not_found", "\n".join(logs.output))
+                self.assertEqual(m.unreadable, 1)
+
+    def test_nothing_unreadable_is_counted_as_zero(self):
+        client = fake_store({"haruto-submission-261007071836": {f"{MAIL}/{MAIL}.headers": b"Subject: Hi"}})
+        self.assertEqual(fetch_mail_material(client, MAIL, "haruto-submission-261007071836").unreadable, 0)
 
     def test_a_store_outage_propagates(self):
         client = fake_store({})

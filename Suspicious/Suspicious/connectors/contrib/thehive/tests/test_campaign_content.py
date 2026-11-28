@@ -95,6 +95,16 @@ class ContentTest(SimpleTestCase):
             self.assertIn(needle, d)
         self.assertNotIn("https://portal", d)
 
+    def test_the_description_says_when_files_could_not_be_read(self):
+        a, b = member(1), member(2)
+        a.material.unreadable, b.material.unreadable = 1, 2
+        content = build_content(campaign(), [a, b], ui_base="https://ui.example")
+        self.assertIn("3 file(s) could not be read from storage", content.description)
+
+    def test_the_description_is_silent_when_every_file_was_read(self):
+        content = build_content(campaign(), [member(1)], ui_base="https://ui.example")
+        self.assertNotIn("could not be read", content.description)
+
     def test_only_relevant_files_are_uploaded_once(self):
         pdf = Attachment("Notice.pdf", b"%PDF-1")
         c = self._content([member(1, atts=[pdf, Attachment("empty.dat", b"")]),
